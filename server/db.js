@@ -1,4 +1,4 @@
-import path from 'path';
+﻿import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { INITIAL_STORE } from './initialStore.js';
@@ -7,7 +7,84 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 let dbInstance = null;
+const DEFAULT_ORG_ID = 'ORG-saivyy-default';
 
+// ─── 1. TURSO (libSQL) Cloud Adapter ─────────────────────────────────────────
+async function loadTursoDriver() {
+  try {
+    const libsql = await import('@libsql/client');
+    return libsql;
+  } catch (err) {
+    console.warn('libsql client not available:', err?.message || err);
+    return null;
+  }
+}
+
+function rowToPlain(row) {
+  if (!row) return undefined;
+  const obj = {};
+  for (const key of Object.keys(row)) {
+    obj[key] = row[key];
+  }
+  return obj;
+}
+
+function createTursoAdapter(client) {
+  return {
+    _isTurso: true,
+
+    async exec(sql) {
+      const stmts = sql
+        .split(';')
+        .map(s => s.trim())
+        .filter(s => s.length > 0)
+        .map(s => ({ sql: s, args: [] }));
+      if (stmts.length > 0) {
+        try {
+          await client.batch(stmts, 'write');
+        } catch (e) {
+          for (const stmt of stmts) {
+            try { await client.execute(stmt); } catch (_) {}
+          }
+        }
+      }
+      return true;
+    },
+
+    async get(sql, params = []) {
+      try {
+        const result = await client.execute({ sql, args: params });
+        if (!result.rows || result.rows.length === 0) return undefined;
+        return rowToPlain(result.rows[0]);
+      } catch (e) {
+        console.error('Turso get error:', e?.message, sql);
+        return undefined;
+      }
+    },
+
+    async all(sql, params = []) {
+      try {
+        const result = await client.execute({ sql, args: params });
+        return (result.rows || []).map(rowToPlain);
+      } catch (e) {
+        console.error('Turso all error:', e?.message, sql);
+        return [];
+      }
+    },
+
+    async run(sql, params = []) {
+      try {
+        const result = await client.execute({ sql, args: params });
+        return { changes: result.rowsAffected || 1, lastID: Number(result.lastInsertRowid || 0) };
+      } catch (e) {
+        console.error('Turso run error:', e?.message, sql);
+        return { changes: 0 };
+      }
+    }
+  };
+}
+
+// ─── 2. Local SQLite Driver ───────────────────────────────────────────────────
 async function loadSqliteDriver() {
   try {
     const sqlite3Mod = await import('sqlite3');
@@ -16,14 +93,37 @@ async function loadSqliteDriver() {
     const open = sqliteMod.open;
     return { sqlite3, open };
   } catch (err) {
-    console.warn("Native sqlite3 module not available in environment:", err?.message || err);
+    console.warn('Native sqlite3 module not available:', err?.message || err);
     return null;
   }
 }
 
+// ─── 3. Main getDb() — priority: Turso > local SQLite > in-memory fallback ──
 export async function getDb() {
   if (dbInstance) return dbInstance;
 
+  // Priority 1: Turso cloud database (for Vercel production)
+  if (process.env.TURSO_DATABASE_URL) {
+    console.log('Connecting to Turso cloud database...');
+    const tursoMod = await loadTursoDriver();
+    if (tursoMod && tursoMod.createClient) {
+      try {
+        const client = tursoMod.createClient({
+          url: process.env.TURSO_DATABASE_URL,
+          authToken: process.env.TURSO_AUTH_TOKEN || '',
+        });
+        dbInstance = createTursoAdapter(client);
+        await initDb(dbInstance);
+        console.log('Turso cloud database connected and initialized');
+        return dbInstance;
+      } catch (e) {
+        console.error('Turso connection failed, falling back:', e?.message);
+        dbInstance = null;
+      }
+    }
+  }
+
+  // Priority 2: Local SQLite file
   const driverObj = await loadSqliteDriver();
 
   if (driverObj && driverObj.open && driverObj.sqlite3) {
@@ -37,7 +137,7 @@ export async function getDb() {
         }
         dbPath = tmpPath;
       } catch (e) {
-        console.warn("Could not copy sqlite DB to /tmp, using default path:", e);
+        console.warn('Could not copy sqlite DB to /tmp:', e);
       }
     }
 
@@ -49,7 +149,7 @@ export async function getDb() {
       await initDb(dbInstance);
       return dbInstance;
     } catch (err) {
-      console.warn("Failed to open file-based SQLite, trying in-memory SQLite fallback:", err);
+      console.warn('File SQLite failed, trying in-memory:', err);
       try {
         dbInstance = await driverObj.open({
           filename: ':memory:',
@@ -58,17 +158,18 @@ export async function getDb() {
         await initDb(dbInstance);
         return dbInstance;
       } catch (memErr) {
-        console.warn("In-memory sqlite open failed, initializing pure JS fallback store:", memErr);
+        console.warn('In-memory sqlite failed:', memErr);
       }
     }
   }
 
-  // Pure JavaScript Fallback Store for Vercel Serverless environments
-  console.log("⚡ Using Saivyy CRM Resilient In-Memory Serverless Data Store");
+  // Priority 3: Pure JS in-memory fallback
+  console.log('Using in-memory JS fallback store');
   dbInstance = createMemoryFallbackDb();
   return dbInstance;
 }
 
+// ─── 4. JS In-Memory Fallback ─────────────────────────────────────────────────
 function createMemoryFallbackDb() {
   const TMP_STORE_PATH = path.join('/tmp', 'saivyy_store.json');
   let store;
@@ -98,14 +199,9 @@ function createMemoryFallbackDb() {
   }
 
   function saveStore() {
-    try {
-      fs.writeFileSync(TMP_STORE_PATH, JSON.stringify(store));
-    } catch (e) {
-      // Ignore if /tmp is not writable
-    }
+    try { fs.writeFileSync(TMP_STORE_PATH, JSON.stringify(store)); } catch (e) {}
   }
 
-  const DEFAULT_ORG_ID = 'ORG-saivyy-default';
   const DEFAULT_USER_ID = 'U-117bb402-3724-4580-9da9-01311b759889';
 
   function getTableName(sql) {
@@ -193,14 +289,11 @@ function createMemoryFallbackDb() {
   }
 
   return {
-    async exec() {
-      return true;
-    },
+    async exec() { return true; },
     async get(sql, params = []) {
       if (sql && sql.includes('COUNT(*)')) {
         const table = getTableName(sql);
-        const list = store[table] || [];
-        return { count: list.length };
+        return { count: (store[table] || []).length };
       }
       const table = getTableName(sql);
       const rows = filterRows(store[table] || [], sql, params);
@@ -225,14 +318,13 @@ function createMemoryFallbackDb() {
           const valTokens = valMatch[1].split(',').map(v => v.trim());
           let pIdx = 0;
           for (let i = 0; i < cols.length; i++) {
-            const col = cols[i];
             const token = valTokens[i] || '?';
             if (token === '?') {
-              newObj[col] = params[pIdx++] ?? null;
+              newObj[cols[i]] = params[pIdx++] ?? null;
             } else {
               let lit = token.replace(/^['"]|['"]$/g, '');
               if (/^\d+$/.test(lit)) lit = Number(lit);
-              newObj[col] = lit;
+              newObj[cols[i]] = lit;
             }
           }
         } else if (params.length > 0) {
@@ -241,20 +333,15 @@ function createMemoryFallbackDb() {
           newObj.userId = params[params.length - 1] || DEFAULT_USER_ID;
           newObj.created = new Date().toISOString();
         }
-        if (newObj.id) {
-          store[table].unshift(newObj);
-          saveStore();
-        }
+        if (newObj.id) { store[table].unshift(newObj); saveStore(); }
       } else if (clean.toUpperCase().startsWith('UPDATE') && table) {
         const setMatch = clean.match(/UPDATE\s+[a-z0-9_]+\s+SET\s+(.+?)\s+WHERE\s+(.+)/i);
         if (setMatch) {
-          const setClause = setMatch[1];
+          const setTokens = setMatch[1].split(',').map(s => s.trim());
           const whereClause = setMatch[2];
-          const setTokens = setClause.split(',').map(s => s.trim());
           const numSetParams = setTokens.filter(s => s.includes('?')).length;
           const setParams = params.slice(0, numSetParams);
           const whereParams = params.slice(numSetParams);
-
           let targets = store[table] || [];
           if (whereClause.includes('id = ?')) {
             const id = whereParams[whereParams.length - 1] || whereParams[0];
@@ -263,7 +350,6 @@ function createMemoryFallbackDb() {
             const emailParam = whereParams[0];
             if (emailParam) targets = targets.filter(r => r.email && r.email.toLowerCase() === String(emailParam).toLowerCase());
           }
-
           let pIdx = 0;
           const updates = {};
           for (const token of setTokens) {
@@ -277,25 +363,16 @@ function createMemoryFallbackDb() {
               updates[col] = val;
             }
           }
-
-          for (const item of targets) {
-            Object.assign(item, updates);
-          }
+          for (const item of targets) Object.assign(item, updates);
           saveStore();
         }
       } else if (clean.toUpperCase().startsWith('DELETE') && table) {
         if (clean.includes('WHERE id = ?')) {
           const id = params[0];
-          if (store[table]) {
-            store[table] = store[table].filter(r => r.id !== id);
-            saveStore();
-          }
+          if (store[table]) { store[table] = store[table].filter(r => r.id !== id); saveStore(); }
         } else if (clean.includes('WHERE teamId = ?')) {
           const teamId = params[0];
-          if (store[table]) {
-            store[table] = store[table].filter(r => r.teamId !== teamId);
-            saveStore();
-          }
+          if (store[table]) { store[table] = store[table].filter(r => r.teamId !== teamId); saveStore(); }
         }
       }
       return { changes: 1 };
@@ -303,6 +380,7 @@ function createMemoryFallbackDb() {
   };
 }
 
+// ─── 5. Database Schema & Seed ────────────────────────────────────────────────
 async function initDb(db) {
   await db.exec(`
     CREATE TABLE IF NOT EXISTS users (
@@ -315,7 +393,6 @@ async function initDb(db) {
       orgId TEXT,
       created TEXT
     );
-
     CREATE TABLE IF NOT EXISTS leads (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -342,7 +419,6 @@ async function initDb(db) {
       notes TEXT,
       userId TEXT
     );
-
     CREATE TABLE IF NOT EXISTS deals (
       id TEXT PRIMARY KEY,
       deal TEXT NOT NULL,
@@ -359,7 +435,6 @@ async function initDb(db) {
       probability INTEGER DEFAULT 20,
       userId TEXT
     );
-
     CREATE TABLE IF NOT EXISTS customers (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -377,7 +452,6 @@ async function initDb(db) {
       location TEXT,
       userId TEXT
     );
-
     CREATE TABLE IF NOT EXISTS companies (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -390,7 +464,6 @@ async function initDb(db) {
       status TEXT,
       userId TEXT
     );
-
     CREATE TABLE IF NOT EXISTS teams (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -398,7 +471,6 @@ async function initDb(db) {
       created TEXT,
       userId TEXT
     );
-
     CREATE TABLE IF NOT EXISTS team_members (
       id TEXT PRIMARY KEY,
       teamId TEXT NOT NULL,
@@ -419,7 +491,6 @@ async function initDb(db) {
       created TEXT,
       userId TEXT
     );
-
     CREATE TABLE IF NOT EXISTS tasks (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
@@ -431,7 +502,6 @@ async function initDb(db) {
       created TEXT,
       userId TEXT
     );
-
     CREATE TABLE IF NOT EXISTS calls (
       id TEXT PRIMARY KEY,
       contact TEXT NOT NULL,
@@ -444,7 +514,6 @@ async function initDb(db) {
       owner TEXT,
       userId TEXT
     );
-
     CREATE TABLE IF NOT EXISTS meetings (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
@@ -459,7 +528,6 @@ async function initDb(db) {
       attendees TEXT,
       userId TEXT
     );
-
     CREATE TABLE IF NOT EXISTS activities (
       id TEXT PRIMARY KEY,
       type TEXT NOT NULL,
@@ -471,7 +539,6 @@ async function initDb(db) {
       owner TEXT,
       userId TEXT
     );
-
     CREATE TABLE IF NOT EXISTS team (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -489,7 +556,6 @@ async function initDb(db) {
       status TEXT,
       userId TEXT
     );
-
     CREATE TABLE IF NOT EXISTS automations (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -499,7 +565,6 @@ async function initDb(db) {
       triggered INTEGER DEFAULT 0,
       userId TEXT
     );
-
     CREATE TABLE IF NOT EXISTS campaigns (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -513,7 +578,6 @@ async function initDb(db) {
       created TEXT,
       userId TEXT
     );
-
     CREATE TABLE IF NOT EXISTS notifications (
       id TEXT PRIMARY KEY,
       type TEXT,
@@ -522,7 +586,6 @@ async function initDb(db) {
       read INTEGER DEFAULT 0,
       userId TEXT
     );
-
     CREATE TABLE IF NOT EXISTS integrations (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -537,141 +600,127 @@ async function initDb(db) {
     );
   `);
 
-  // Migrate users table: add orgId column if missing
+  // Migrate users table (local SQLite only)
   try {
     const userCols = await db.all('PRAGMA table_info(users)');
     if (!userCols.some(c => c.name === 'orgId')) {
       await db.run('ALTER TABLE users ADD COLUMN orgId TEXT');
-      console.log('Added orgId column to users table');
     }
     if (!userCols.some(c => c.name === 'role')) {
       await db.run("ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'Member'");
     }
-  } catch(e) { console.error('users migration:', e); }
+  } catch(e) {}
 
-  const DEFAULT_ORG_ID = 'ORG-saivyy-default';
-  // Backfill orgId for existing users if missing
-  await db.run(`UPDATE users SET orgId = ? WHERE (orgId IS NULL OR orgId = '')`, [DEFAULT_ORG_ID]);
-
-  // Ensure column migrations on all CRM tables
-  const tables = [
-    'leads', 'deals', 'customers', 'companies', 'teams', 'team_members',
-    'tasks', 'calls', 'meetings', 'activities', 'automations', 'campaigns',
-    'notifications', 'integrations'
-  ];
-
-  for (const table of tables) {
-    try {
-      const colInfo = await db.all(`PRAGMA table_info(${table})`);
-      const hasUserId = colInfo.some(c => c.name === 'userId');
-      if (!hasUserId) {
-        await db.run(`ALTER TABLE ${table} ADD COLUMN userId TEXT`);
-        console.log(`Added column userId to table ${table}`);
-      }
-    } catch (e) {
-      console.error(`Migration error for ${table}:`, e);
-    }
-  }
-
-  // Migrate leads table: add business details columns if missing
   try {
-    const leadCols = await db.all('PRAGMA table_info(leads)');
-    const colNames = leadCols.map(c => c.name);
-    if (!colNames.includes('businessDescription')) await db.run('ALTER TABLE leads ADD COLUMN businessDescription TEXT');
-    if (!colNames.includes('companySize')) await db.run('ALTER TABLE leads ADD COLUMN companySize TEXT');
-    if (!colNames.includes('annualRevenue')) await db.run('ALTER TABLE leads ADD COLUMN annualRevenue TEXT');
-    if (!colNames.includes('businessModel')) await db.run('ALTER TABLE leads ADD COLUMN businessModel TEXT');
-  } catch (e) {
-    console.error('Leads business details migration error:', e);
+    await db.run(`UPDATE users SET orgId = ? WHERE (orgId IS NULL OR orgId = '')`, [DEFAULT_ORG_ID]);
+  } catch(e) {}
+
+  // Column migrations for local SQLite
+  if (!db._isTurso) {
+    const tables = ['leads', 'deals', 'customers', 'companies', 'teams', 'team_members', 'tasks', 'calls', 'meetings', 'activities', 'automations', 'campaigns', 'notifications', 'integrations'];
+    for (const table of tables) {
+      try {
+        const colInfo = await db.all(`PRAGMA table_info(${table})`);
+        if (!colInfo.some(c => c.name === 'userId')) {
+          await db.run(`ALTER TABLE ${table} ADD COLUMN userId TEXT`);
+        }
+      } catch (e) {}
+    }
+    try {
+      const leadCols = await db.all('PRAGMA table_info(leads)');
+      const colNames = leadCols.map(c => c.name);
+      if (!colNames.includes('businessDescription')) await db.run('ALTER TABLE leads ADD COLUMN businessDescription TEXT');
+      if (!colNames.includes('companySize')) await db.run('ALTER TABLE leads ADD COLUMN companySize TEXT');
+      if (!colNames.includes('annualRevenue')) await db.run('ALTER TABLE leads ADD COLUMN annualRevenue TEXT');
+      if (!colNames.includes('businessModel')) await db.run('ALTER TABLE leads ADD COLUMN businessModel TEXT');
+    } catch (e) {}
   }
 
-  // Set default userId for existing records to Manas Saxena
-  for (const table of tables) {
+  // Set default userId
+  const crmTables = ['leads', 'deals', 'customers', 'companies', 'teams', 'team_members', 'tasks', 'calls', 'meetings', 'activities', 'automations', 'campaigns', 'notifications', 'integrations'];
+  for (const table of crmTables) {
     try {
       await db.run(`UPDATE ${table} SET userId = 'U-117bb402-3724-4580-9da9-01311b759889' WHERE userId IS NULL OR userId = 'U-admin'`);
-    } catch (e) {
-      console.error(`Failed to seed userId for table ${table}:`, e);
+    } catch (e) {}
+  }
+
+  // Seed users if empty
+  const userCount = await db.get("SELECT COUNT(*) as count FROM users");
+  if (userCount && userCount.count === 0) {
+    for (const u of (INITIAL_STORE.users || [])) {
+      try {
+        await db.run(
+          `INSERT INTO users (id, name, email, password, role, orgName, orgId, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [u.id, u.name, u.email, u.password, u.role, u.orgName, u.orgId || DEFAULT_ORG_ID, u.created || new Date().toISOString()]
+        );
+      } catch (e) {}
     }
   }
 
-  await db.run(
-    `UPDATE leads
-     SET dealValue = '₹0', dealValueNum = 0, probability = 100
-     WHERE notes LIKE 'Imported via %'
-       AND dealValueNum = 500000
-       AND probability = 20`
-  );
-
-
-
-  // Seed default integrations if empty
+  // Seed integrations if empty
   const intCount = await db.get("SELECT COUNT(*) as count FROM integrations");
-  if (intCount.count === 0) {
+  if (intCount && intCount.count === 0) {
     const defaultIntegrations = [
-      { id: "whatsapp", name: "WhatsApp Business API", category: "Messaging", status: 1, desc: "Send automated WhatsApp follow-ups, template messages, and interactive chat responses.", apiKey: "wa_live_94821048", webhookUrl: "https://api.ledgercrm.com/v1/webhooks/whatsapp", config: JSON.stringify({ phoneNumber: "+91 98000 11111", template: "Lead Welcome Sequence" }), lastSync: "5 mins ago" },
-      { id: "meta_leads", name: "Meta Lead Ads (Facebook & IG)", category: "Lead Capture", status: 1, desc: "Instantly capture incoming leads from Facebook and Instagram lead ad campaigns.", apiKey: "meta_access_token_84920", webhookUrl: "https://api.ledgercrm.com/v1/webhooks/meta-leads", config: JSON.stringify({ pageId: "1094820194", formId: "492810" }), lastSync: "12 mins ago" },
-      { id: "linkedin", name: "LinkedIn Sales Navigator", category: "Social Selling", status: 1, desc: "Import company profiles, Decision Maker contacts, and sync InMail conversations.", apiKey: "li_oauth_token_94812", webhookUrl: "https://api.ledgercrm.com/v1/webhooks/linkedin", config: JSON.stringify({ syncInMail: true }), lastSync: "1 hour ago" },
-      { id: "gmail", name: "Google Workspace / Gmail", category: "Email Sync", status: 1, desc: "2-way sync for customer emails, Google Meet links, and Google Calendar invites.", apiKey: "gm_live_94827041823901", webhookUrl: "https://api.ledgercrm.com/v1/webhooks/gmail", config: JSON.stringify({ autoSync: true, syncInterval: "5 mins" }), lastSync: "2 mins ago" },
-      { id: "outlook", name: "Microsoft Outlook 365", category: "Email & Calendar", status: 0, desc: "Sync Outlook emails, Microsoft Teams call recordings, and O365 calendar events.", apiKey: "", webhookUrl: "", config: JSON.stringify({ tenantId: "" }), lastSync: "Never" },
-      { id: "twilio", name: "Twilio Voice & SMS", category: "Telephony", status: 1, desc: "One-click click-to-call, SMS drip sequences, and automatic call recording sync.", apiKey: "AC948201948102948120", webhookUrl: "https://api.ledgercrm.com/v1/webhooks/twilio", config: JSON.stringify({ twilioNumber: "+1 800 555 0199" }), lastSync: "30 mins ago" },
-      { id: "exotel", name: "Exotel / Cloud Telephony", category: "Telephony", status: 0, desc: "Cloud telephony IVR integration for Indian virtual sales call tracking and recording.", apiKey: "", webhookUrl: "", config: JSON.stringify({ sid: "" }), lastSync: "Never" },
-      { id: "slack", name: "Slack Deal Alerts", category: "Alerts", status: 1, desc: "Post real-time deal stage changes and won revenue alerts to #sales-wins.", apiKey: "xoxb-948291048-sales-bot", webhookUrl: "https://hooks.slack.com/services/T00/B00/XXXX", config: JSON.stringify({ channel: "#sales-wins", notifyDeals: true }), lastSync: "10 mins ago" },
-      { id: "calendly", name: "Calendly Meeting Sync", category: "Calendar", status: 1, desc: "Automatically create meeting events and contacts when prospects book a slot.", apiKey: "cal_live_948102948", webhookUrl: "https://api.ledgercrm.com/v1/webhooks/calendly", config: JSON.stringify({ eventType: "30min Demo" }), lastSync: "15 mins ago" },
-      { id: "razorpay", name: "Razorpay Payments & Invoices", category: "Billing", status: 1, desc: "Generate payment links, track customer invoice statuses, and log payments automatically.", apiKey: "rzp_live_948102948", webhookUrl: "https://api.ledgercrm.com/v1/webhooks/razorpay", config: JSON.stringify({ autoReceipt: true }), lastSync: "45 mins ago" },
-      { id: "stripe", name: "Stripe Subscriptions", category: "Billing", status: 0, desc: "Track customer subscription plans, recurring invoices, and MRR inside CRM.", apiKey: "", webhookUrl: "", config: JSON.stringify({ mode: "live" }), lastSync: "Never" },
-      { id: "mailchimp", name: "Mailchimp & Brevo", category: "Email Marketing", status: 0, desc: "Sync CRM contacts with marketing subscriber lists and automated newsletters.", apiKey: "", webhookUrl: "", config: JSON.stringify({ listId: "" }), lastSync: "Never" },
-      { id: "typeform", name: "Typeform / Google Forms", category: "Lead Capture", status: 1, desc: "Convert form entries directly into scored leads in your sales pipeline.", apiKey: "tf_live_948102", webhookUrl: "https://api.ledgercrm.com/v1/webhooks/typeform", config: JSON.stringify({ formId: "contact-form-1" }), lastSync: "2 hours ago" },
-      { id: "zapier", name: "Zapier Automations", category: "Workflow", status: 1, desc: "Connect Ledger CRM with 5,000+ web apps seamlessly.", apiKey: "zap_live_83921048", webhookUrl: "https://hooks.zapier.com/hooks/catch/123/abc", config: JSON.stringify({ activeZaps: 4 }), lastSync: "1 hour ago" },
-      { id: "make", name: "Make.com (Integromat)", category: "Workflow", status: 0, desc: "Visual scenario builder for multi-step data pipelines and webhook routing.", apiKey: "", webhookUrl: "", config: JSON.stringify({ scenarioId: "" }), lastSync: "Never" },
-      { id: "openai", name: "OpenAI GPT-4o Sales Copilot", category: "AI & Intelligence", status: 1, desc: "Generate AI email drafts, call summaries, and buyer sentiment analysis.", apiKey: "sk-proj-openai-live-key", webhookUrl: "", config: JSON.stringify({ model: "gpt-4o" }), lastSync: "Active" },
-      { id: "fireflies", name: "Fireflies.ai / Otter.ai", category: "AI & Intelligence", status: 0, desc: "Automatically record, transcribe, and extract action items from video calls.", apiKey: "", webhookUrl: "", config: JSON.stringify({ autoJoin: true }), lastSync: "Never" },
-      { id: "hubspot", name: "HubSpot Data Migration", category: "Data Sync", status: 0, desc: "Import legacy HubSpot contacts, historical deal logs, and notes.", apiKey: "", webhookUrl: "", config: JSON.stringify({ portalId: "" }), lastSync: "Never" }
+      { id: "whatsapp", name: "WhatsApp Business API", category: "Messaging", status: 1, desc: "Send automated WhatsApp follow-ups.", apiKey: "wa_live_94821048", webhookUrl: "https://api.ledgercrm.com/v1/webhooks/whatsapp", config: "{}", lastSync: "5 mins ago" },
+      { id: "meta_leads", name: "Meta Lead Ads", category: "Lead Capture", status: 1, desc: "Capture leads from Facebook and Instagram.", apiKey: "meta_access_token_84920", webhookUrl: "https://api.ledgercrm.com/v1/webhooks/meta-leads", config: "{}", lastSync: "12 mins ago" },
+      { id: "gmail", name: "Google Workspace / Gmail", category: "Email Sync", status: 1, desc: "2-way sync for customer emails.", apiKey: "gm_live_94827041823901", webhookUrl: "https://api.ledgercrm.com/v1/webhooks/gmail", config: "{}", lastSync: "2 mins ago" },
+      { id: "twilio", name: "Twilio Voice & SMS", category: "Telephony", status: 1, desc: "Click-to-call and SMS sequences.", apiKey: "AC948201948102948120", webhookUrl: "https://api.ledgercrm.com/v1/webhooks/twilio", config: "{}", lastSync: "30 mins ago" },
+      { id: "slack", name: "Slack Deal Alerts", category: "Alerts", status: 1, desc: "Post deal stage changes to Slack.", apiKey: "xoxb-948291048-sales-bot", webhookUrl: "https://hooks.slack.com/services/T00/B00/XXXX", config: "{}", lastSync: "10 mins ago" },
+      { id: "openai", name: "OpenAI GPT-4o Sales Copilot", category: "AI & Intelligence", status: 1, desc: "Generate AI email drafts and summaries.", apiKey: "sk-proj-openai-live-key", webhookUrl: "", config: "{}", lastSync: "Active" },
+      { id: "razorpay", name: "Razorpay Payments & Invoices", category: "Billing", status: 1, desc: "Generate payment links and track invoices.", apiKey: "rzp_live_948102948", webhookUrl: "https://api.ledgercrm.com/v1/webhooks/razorpay", config: "{}", lastSync: "45 mins ago" },
+      { id: "zapier", name: "Zapier Automations", category: "Workflow", status: 1, desc: "Connect CRM with 5,000+ web apps.", apiKey: "zap_live_83921048", webhookUrl: "https://hooks.zapier.com/hooks/catch/123/abc", config: "{}", lastSync: "1 hour ago" },
     ];
-
     for (const item of defaultIntegrations) {
-      await db.run(
-        `INSERT INTO integrations (id, name, category, status, desc, apiKey, webhookUrl, config, lastSync)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [item.id, item.name, item.category, item.status, item.desc, item.apiKey, item.webhookUrl, item.config, item.lastSync]
-      );
+      try {
+        await db.run(
+          `INSERT INTO integrations (id, name, category, status, desc, apiKey, webhookUrl, config, lastSync, userId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [item.id, item.name, item.category, item.status, item.desc, item.apiKey, item.webhookUrl, item.config, item.lastSync, 'U-117bb402-3724-4580-9da9-01311b759889']
+        );
+      } catch (e) {}
     }
   }
 
-  // Seed leads and other tables if empty from INITIAL_STORE
+  // Seed leads if empty
   const leadCount = await db.get("SELECT COUNT(*) as count FROM leads");
-  if (leadCount.count === 0 && INITIAL_STORE.leads && INITIAL_STORE.leads.length > 0) {
+  if (leadCount && leadCount.count === 0 && INITIAL_STORE.leads && INITIAL_STORE.leads.length > 0) {
+    console.log(`Seeding ${INITIAL_STORE.leads.length} leads...`);
     for (const l of INITIAL_STORE.leads) {
-      await db.run(
-        `INSERT INTO leads (id, name, initials, company, title, email, phone, status, priority, score, source, owner, ownerInitials, lastContact, nextFollowup, dealValue, dealValueNum, probability, created, industry, location, website, notes, businessDescription, companySize, annualRevenue, businessModel, userId)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [l.id, l.name, l.initials, l.company, l.title, l.email, l.phone, l.status, l.priority, l.score, l.source, l.owner, l.ownerInitials, l.lastContact, l.nextFollowup, l.dealValue, l.dealValueNum, l.probability, l.created, l.industry, l.location, l.website, l.notes || '', l.businessDescription || '', l.companySize || '', l.annualRevenue || '', l.businessModel || '', l.userId]
-      );
+      try {
+        await db.run(
+          `INSERT INTO leads (id, name, initials, company, title, email, phone, status, priority, score, source, owner, ownerInitials, lastContact, nextFollowup, dealValue, dealValueNum, probability, created, industry, location, website, notes, userId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [l.id, l.name, l.initials, l.company, l.title, l.email, l.phone, l.status, l.priority, l.score, l.source, l.owner, l.ownerInitials, l.lastContact, l.nextFollowup, l.dealValue, l.dealValueNum, l.probability, l.created, l.industry, l.location, l.website, l.notes || '', l.userId]
+        );
+      } catch (e) {}
+    }
+    if (INITIAL_STORE.teams) {
+      for (const t of INITIAL_STORE.teams) {
+        try {
+          await db.run(`INSERT INTO teams (id, name, description, created, userId) VALUES (?, ?, ?, ?, ?)`, [t.id, t.name, t.description, t.created, t.userId]);
+        } catch (e) {}
+      }
     }
     if (INITIAL_STORE.team_members) {
       for (const tm of INITIAL_STORE.team_members) {
-        await db.run(
-          `INSERT INTO team_members (id, teamId, name, initials, role, email, phone, tag, leads, calls, meetings, conv, revenue, won, lost, status, created, userId)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [tm.id, tm.teamId, tm.name, tm.initials, tm.role, tm.email, tm.phone, tm.tag, tm.leads, tm.calls, tm.meetings, tm.conv, tm.revenue, tm.won, tm.lost, tm.status, tm.created, tm.userId]
-        );
+        try {
+          await db.run(
+            `INSERT INTO team_members (id, teamId, name, initials, role, email, phone, tag, leads, calls, meetings, conv, revenue, won, lost, status, created, userId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [tm.id, tm.teamId, tm.name, tm.initials, tm.role, tm.email, tm.phone, tm.tag, tm.leads, tm.calls, tm.meetings, tm.conv, tm.revenue, tm.won, tm.lost, tm.status, tm.created, tm.userId]
+          );
+        } catch (e) {}
       }
     }
     if (INITIAL_STORE.activities) {
       for (const a of INITIAL_STORE.activities) {
-        await db.run(
-          `INSERT INTO activities (id, type, contact, company, description, date, time, owner, userId)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [a.id, a.type, a.contact, a.company, a.description, a.date, a.time, a.owner, a.userId]
-        );
+        try {
+          await db.run(`INSERT INTO activities (id, type, contact, company, description, date, time, owner, userId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [a.id, a.type, a.contact, a.company, a.description, a.date, a.time, a.owner, a.userId]);
+        } catch (e) {}
       }
     }
     if (INITIAL_STORE.calls) {
       for (const cl of INITIAL_STORE.calls) {
-        await db.run(
-          `INSERT INTO calls (id, contact, company, date, time, duration, outcome, notes, owner, userId)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [cl.id, cl.contact, cl.company, cl.date, cl.time, cl.duration, cl.outcome, cl.notes, cl.owner, cl.userId]
-        );
+        try {
+          await db.run(`INSERT INTO calls (id, contact, company, date, time, duration, outcome, notes, owner, userId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [cl.id, cl.contact, cl.company, cl.date, cl.time, cl.duration, cl.outcome, cl.notes, cl.owner, cl.userId]);
+        } catch (e) {}
       }
     }
   }
