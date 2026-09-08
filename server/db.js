@@ -27,10 +27,18 @@ export async function getDb() {
     }
   }
 
-  dbInstance = await open({
-    filename: dbPath,
-    driver: sqlite3.Database
-  });
+  try {
+    dbInstance = await open({
+      filename: dbPath,
+      driver: sqlite3.Database
+    });
+  } catch (err) {
+    console.warn("Failed to open file-based SQLite, trying in-memory SQLite fallback:", err);
+    dbInstance = await open({
+      filename: ':memory:',
+      driver: sqlite3.Database
+    });
+  }
 
   await initDb(dbInstance);
   return dbInstance;

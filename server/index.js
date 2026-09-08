@@ -1155,6 +1155,15 @@ app.use((req, res, next) => {
   res.sendFile(path.join(distPath, 'index.html'));
 });
 
+// Express Global Error Handler — Guarantees all server errors return valid JSON
+app.use((err, req, res, next) => {
+  console.error('API Error:', err);
+  res.status(err.status || 500).json({
+    success: false,
+    error: err.message || 'Internal Server Error'
+  });
+});
+
 if (!process.env.VERCEL) {
   app.listen(PORT, () => {
     console.log(`⚡ Saivyy CRM REST API server running at http://localhost:${PORT}`);

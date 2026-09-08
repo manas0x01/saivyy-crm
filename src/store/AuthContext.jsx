@@ -2,6 +2,25 @@ import React, { createContext, useContext, useState, useEffect } from "react";
 
 const AuthContext = createContext(null);
 
+async function safeJsonFetch(url, options = {}) {
+  const res = await fetch(url, options);
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(
+      res.status >= 500
+        ? "Server error (500). Please check backend deployment logs or database setup."
+        : `Server error (${res.status}): ${text.slice(0, 80)}`
+    );
+  }
+  if (!res.ok || (data && data.success === false)) {
+    throw new Error(data.error || data.message || `Request failed with status ${res.status}`);
+  }
+  return data;
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);           // current active user (may be impersonated)
   const [originalLeader, setOriginalLeader] = useState(null); // real leader stored when impersonating
@@ -17,15 +36,16 @@ export function AuthProvider({ children }) {
           const parsed = JSON.parse(savedUserStr);
           setUser(parsed);
           // Fetch fresh user profile from backend to sync latest role & org
-          const res = await fetch("/api/auth/me", {
-            headers: { "x-user-id": parsed.id || "" }
-          });
-          if (res.ok) {
-            const data = await res.json();
+          try {
+            const data = await safeJsonFetch("/api/auth/me", {
+              headers: { "x-user-id": parsed.id || "" }
+            });
             if (data.success && data.user) {
               localStorage.setItem("saivyy_crm_user", JSON.stringify(data.user));
               setUser(data.user);
             }
+          } catch (e) {
+            console.warn("Could not sync latest session from server:", e.message);
           }
         }
         if (savedLeaderStr) setOriginalLeader(JSON.parse(savedLeaderStr));
@@ -39,30 +59,22 @@ export function AuthProvider({ children }) {
   }, []);
 
   const login = async (email, password) => {
-    const res = await fetch("/api/auth/login", {
+    const data = await safeJsonFetch("/api/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password }),
     });
-    const data = await res.json();
-    if (!res.ok || !data.success) {
-      throw new Error(data.error || "Login failed");
-    }
     localStorage.setItem("saivyy_crm_user", JSON.stringify(data.user));
     setUser(data.user);
     return data.user;
   };
 
   const signup = async (name, email, password, role, orgName) => {
-    const res = await fetch("/api/auth/signup", {
+    const data = await safeJsonFetch("/api/auth/signup", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, email, password, role, orgName }),
     });
-    const data = await res.json();
-    if (!res.ok || !data.success) {
-      throw new Error(data.error || "Signup failed");
-    }
     localStorage.setItem("saivyy_crm_user", JSON.stringify(data.user));
     setUser(data.user);
     return data.user;
@@ -76,7 +88,7 @@ export function AuthProvider({ children }) {
   };
 
   const createMember = async (name, email, password, role = "Member") => {
-    const res = await fetch("/api/auth/create-member", {
+    const data = await safeJsonFetch("/api/auth/create-member", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -84,17 +96,13 @@ export function AuthProvider({ children }) {
       },
       body: JSON.stringify({ name, email, password, role }),
     });
-    const data = await res.json();
-    if (!res.ok || !data.success) {
-      throw new Error(data.error || "Failed to create member credentials");
-    }
     return data.user;
   };
 
   // Leader impersonates a member — switches active session to that member's context
   const impersonate = async (memberId) => {
     const leaderToSave = originalLeader || user; // preserve the real leader
-    const res = await fetch("/api/auth/impersonate", {
+    const data = await safeJsonFetch("/api/auth/impersonate", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -102,10 +110,6 @@ export function AuthProvider({ children }) {
       },
       body: JSON.stringify({ memberId }),
     });
-    const data = await res.json();
-    if (!res.ok || !data.success) {
-      throw new Error(data.error || "Impersonation failed");
-    }
     // Save original leader and switch to member view
     localStorage.setItem("saivyy_crm_original_leader", JSON.stringify(leaderToSave));
     localStorage.setItem("saivyy_crm_user", JSON.stringify(data.member));
@@ -126,14 +130,10 @@ export function AuthProvider({ children }) {
   // Fetch all org members (for Leaders only)
   const fetchOrgMembers = async () => {
     const leaderId = originalLeader?.id || user?.id;
-    const res = await fetch("/api/users/org-members", {
+    const data = await safeJsonFetch("/api/users/org-members", {
       headers: { "x-user-id": leaderId || "" }
     });
-    const data = await res.json();
-    if (!res.ok || !data.success) {
-      throw new Error(data.error || "Failed to fetch org members");
-    }
-    return data.members;
+    return data.members || [];
   };
 
   const isImpersonating = Boolean(originalLeader);
