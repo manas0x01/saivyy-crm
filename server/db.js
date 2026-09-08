@@ -105,9 +105,25 @@ function createMemoryFallbackDb() {
       ];
     }
 
-    if (clean.includes('WHERE email = ?') || clean.includes('WHERE email =')) {
-      const email = params[0];
-      if (email) rows = rows.filter(r => r.email && r.email.toLowerCase() === String(email).toLowerCase());
+    if (/WHERE\s+.*email/i.test(clean)) {
+      if (clean.includes('LOWER(email) = LOWER(?) OR LOWER(name) = LOWER(?)') || clean.includes('LOWER(email) = ? OR LOWER(name) = ?')) {
+        const emailParam = params[0];
+        const nameParam = params[1];
+        rows = rows.filter(r =>
+          (r.email && emailParam && r.email.toLowerCase() === String(emailParam).toLowerCase()) ||
+          (r.name && nameParam && r.name.toLowerCase() === String(nameParam).toLowerCase())
+        );
+      } else if (clean.includes('LOWER(name) = LOWER(?) OR LOWER(email) = LOWER(?)') || clean.includes('LOWER(name) = ? OR LOWER(email) = ?')) {
+        const nameParam = params[0];
+        const emailParam = params[1];
+        rows = rows.filter(r =>
+          (r.name && nameParam && r.name.toLowerCase() === String(nameParam).toLowerCase()) ||
+          (r.email && emailParam && r.email.toLowerCase() === String(emailParam).toLowerCase())
+        );
+      } else {
+        const email = params[0];
+        if (email) rows = rows.filter(r => r.email && r.email.toLowerCase() === String(email).toLowerCase());
+      }
     } else if (clean.includes('WHERE id = ?') || clean.includes('WHERE id =')) {
       const id = params[0];
       if (id) rows = rows.filter(r => r.id === id);

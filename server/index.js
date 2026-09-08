@@ -116,13 +116,15 @@ app.post('/api/auth/signup', async (req, res) => {
 app.post('/api/auth/login', async (req, res) => {
   try {
     const db = await getDb();
-    const { email, password } = req.body;
+    let { email, password } = req.body;
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
     }
+    email = String(email).trim().toLowerCase();
+    password = String(password).trim();
 
-    const user = await db.get('SELECT * FROM users WHERE LOWER(email) = LOWER(?)', [email]);
-    if (!user || user.password !== password) {
+    const user = await db.get('SELECT * FROM users WHERE LOWER(email) = ?', [email]);
+    if (!user || user.password.trim() !== password) {
       return res.status(400).json({ error: 'Invalid email or password' });
     }
 
