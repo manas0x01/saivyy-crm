@@ -181,6 +181,8 @@ function createMemoryFallbackDb() {
 
     if (clean.includes('ORDER BY created ASC')) {
       rows.sort((a, b) => String(a.created || '').localeCompare(String(b.created || '')));
+    } else if (clean.includes('ORDER BY rowid DESC')) {
+      rows = [...rows].reverse();
     }
 
     if (clean.includes('LIMIT 1')) {

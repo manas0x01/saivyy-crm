@@ -300,7 +300,7 @@ app.get('/api/crm/state', async (req, res) => {
       }
 
       // Leaders see all data across the CRM organization
-      leads = await db.all('SELECT * FROM leads ORDER BY rowid DESC');
+      leads = await db.all('SELECT * FROM leads ORDER BY rowid ASC');
       deals = await db.all('SELECT * FROM deals ORDER BY rowid DESC');
       customers = await db.all('SELECT * FROM customers ORDER BY rowid DESC');
       companies = await db.all('SELECT * FROM companies ORDER BY rowid DESC');
@@ -317,7 +317,7 @@ app.get('/api/crm/state', async (req, res) => {
       // Members see their records (by userId or matching owner name)
       const memberOwnerPattern = user ? `%${user.name.toLowerCase()}%` : '%';
       leads = await db.all(
-        `SELECT * FROM leads WHERE userId = ? OR LOWER(owner) LIKE ? ORDER BY rowid DESC`,
+        `SELECT * FROM leads WHERE userId = ? OR LOWER(owner) LIKE ? ORDER BY rowid ASC`,
         [userId, memberOwnerPattern]
       );
       deals = await db.all(
