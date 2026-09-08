@@ -1,16 +1,6 @@
 export const INITIAL_STORE = {
   "users": [
     {
-      "id": "U-76c51d8a-205a-49f1-9a13-ee9c84802480",
-      "name": "MANAS SAXENA",
-      "email": "daakumanas@gmail.com",
-      "password": "MANASsaxena",
-      "role": "Leader",
-      "orgName": "Saivyy Technologies Private Limited",
-      "created": "2026-08-13T10:15:49.445Z",
-      "orgId": "ORG-saivyy-default"
-    },
-    {
       "id": "U-117bb402-3724-4580-9da9-01311b759889",
       "name": "MANAS SAXENA",
       "email": "manassaxena8954@gmail.com",
@@ -6072,7 +6062,7 @@ export const INITIAL_STORE = {
       "name": "MANAS SAXENA",
       "initials": "MS",
       "role": "Leader",
-      "email": "daakumanas@gmail.com",
+      "email": "manassaxena8954@gmail.com",
       "phone": "",
       "tag": "Leader",
       "leads": 0,
