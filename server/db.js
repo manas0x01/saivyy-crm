@@ -1,6 +1,7 @@
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { INITIAL_STORE } from './initialStore.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -69,40 +70,13 @@ export async function getDb() {
 }
 
 function createMemoryFallbackDb() {
+  const store = JSON.parse(JSON.stringify(INITIAL_STORE || {}));
+  const tables = ['users', 'leads', 'deals', 'customers', 'companies', 'teams', 'team_members', 'tasks', 'calls', 'meetings', 'activities', 'automations', 'campaigns', 'notifications', 'integrations'];
+  for (const t of tables) {
+    if (!store[t]) store[t] = [];
+  }
   const DEFAULT_ORG_ID = 'ORG-saivyy-default';
   const DEFAULT_USER_ID = 'U-117bb402-3724-4580-9da9-01311b759889';
-
-  const store = {
-    users: [
-      { id: 'U-117bb402-3724-4580-9da9-01311b759889', name: 'MANAS SAXENA', email: 'manassaxena8954@gmail.com', password: 'MANASsaxena', role: 'Leader', orgName: 'Saivyy Technologies Private Limited', orgId: DEFAULT_ORG_ID, created: new Date().toISOString() },
-      { id: 'U-76c51d8a-205a-49f1-9a13-ee9c84802480', name: 'MANAS SAXENA', email: 'daakumanas@gmail.com', password: 'MANASsaxena', role: 'Leader', orgName: 'Saivyy Technologies Private Limited', orgId: DEFAULT_ORG_ID, created: new Date().toISOString() },
-      { id: 'U-63c6f8cf-3e45-46c0-8a6d-0fae771c755f', name: 'Sidika Bano', email: 'sidikabano001@gmail.com', password: 'SIDIKAbano', role: 'Member', orgName: 'Saivyy Technologies Private Limited', orgId: DEFAULT_ORG_ID, created: new Date().toISOString() },
-      { id: 'U-7a6f3a8f-e424-40d2-8699-9f975e757c30', name: 'KESHAV MADAN', email: 'founder@saivyytechnologies.in', password: 'Founder@123', role: 'Leader', orgName: 'Saivyy Technologies Private Limited', orgId: DEFAULT_ORG_ID, created: new Date().toISOString() },
-      { id: 'U-361449a1-e513-4bfd-9028-0f75d36630fb', name: 'Vidushi singh', email: 'singhvidushi060@gmail.com', password: 'VIDUSHIsingh2026', role: 'Leader', orgName: 'Saivyy Technologies Private Limited', orgId: DEFAULT_ORG_ID, created: new Date().toISOString() },
-    ],
-    leads: [],
-    deals: [],
-    customers: [],
-    companies: [],
-    teams: [],
-    team_members: [],
-    tasks: [],
-    calls: [],
-    meetings: [],
-    activities: [],
-    team: [],
-    automations: [],
-    campaigns: [],
-    notifications: [
-      { id: 'N-1', type: 'alert', text: 'Deal Kavach ERP Rollout idle for 8 days', time: '2h ago', read: 0, userId: DEFAULT_USER_ID },
-      { id: 'N-2', type: 'task', text: '3 tasks are overdue today', time: '4h ago', read: 0, userId: DEFAULT_USER_ID }
-    ],
-    integrations: [
-      { id: "whatsapp", name: "WhatsApp Business API", category: "Messaging", status: 1, desc: "Send automated WhatsApp follow-ups.", apiKey: "wa_live_94821048", webhookUrl: "https://api.ledgercrm.com/v1/webhooks/whatsapp", config: JSON.stringify({ phoneNumber: "+91 98000 11111" }), lastSync: "5 mins ago", userId: DEFAULT_USER_ID },
-      { id: "meta_leads", name: "Meta Lead Ads (Facebook & IG)", category: "Lead Capture", status: 1, desc: "Instantly capture incoming leads from Facebook.", apiKey: "meta_access_token_84920", webhookUrl: "https://api.ledgercrm.com/v1/webhooks/meta-leads", config: JSON.stringify({ formId: "492810" }), lastSync: "12 mins ago", userId: DEFAULT_USER_ID },
-      { id: "gmail", name: "Google Workspace / Gmail", category: "Email Sync", status: 1, desc: "2-way sync for customer emails.", apiKey: "gm_live_94827041823901", webhookUrl: "https://api.ledgercrm.com/v1/webhooks/gmail", config: JSON.stringify({ autoSync: true }), lastSync: "2 mins ago", userId: DEFAULT_USER_ID },
-    ]
-  };
 
   function getTableName(sql) {
     if (!sql || typeof sql !== 'string') return null;
@@ -140,9 +114,23 @@ function createMemoryFallbackDb() {
     } else if (clean.includes('WHERE orgId = ?')) {
       const orgId = params[0];
       if (orgId) rows = rows.filter(r => r.orgId === orgId);
+    } else if (clean.includes('WHERE role =')) {
+      if (clean.includes("'Member'")) rows = rows.filter(r => r.role === 'Member');
+      else if (clean.includes("'Leader'")) rows = rows.filter(r => r.role === 'Leader');
+    } else if (clean.includes('WHERE userId IN')) {
+      if (params && params.length > 0) {
+        rows = rows.filter(r => params.includes(r.userId) || !r.userId);
+      }
     } else if (clean.includes('WHERE userId = ?')) {
       const userId = params[0];
-      if (userId) rows = rows.filter(r => r.userId === userId || !r.userId);
+      if (userId) {
+        if (clean.includes('OR LOWER(owner) LIKE')) {
+          const pattern = String(params[1] || '').replace(/%/g, '').toLowerCase();
+          rows = rows.filter(r => r.userId === userId || (pattern && String(r.owner || '').toLowerCase().includes(pattern)));
+        } else {
+          rows = rows.filter(r => r.userId === userId || !r.userId);
+        }
+      }
     }
 
     if (clean.includes('ORDER BY created ASC')) {
@@ -557,105 +545,42 @@ async function initDb(db) {
     }
   }
 
-  // Seed other tables if empty
+  // Seed leads and other tables if empty from INITIAL_STORE
   const leadCount = await db.get("SELECT COUNT(*) as count FROM leads");
-  if (leadCount.count === 0) {
-    const seedData = (await import('../src/data/seed.js'));
-    
-    // Seed leads
-    for (const l of seedData.LEADS_SEED) {
+  if (leadCount.count === 0 && INITIAL_STORE.leads && INITIAL_STORE.leads.length > 0) {
+    for (const l of INITIAL_STORE.leads) {
       await db.run(
-        `INSERT INTO leads (id, name, initials, company, title, email, phone, status, priority, score, source, owner, ownerInitials, lastContact, nextFollowup, dealValue, dealValueNum, probability, created, industry, location, website, notes)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [l.id, l.name, l.initials, l.company, l.title, l.email, l.phone, l.status, l.priority, l.score, l.source, l.owner, l.ownerInitials, l.lastContact, l.nextFollowup, l.dealValue, l.dealValueNum, l.probability, l.created, l.industry, l.location, l.website, l.notes || '']
+        `INSERT INTO leads (id, name, initials, company, title, email, phone, status, priority, score, source, owner, ownerInitials, lastContact, nextFollowup, dealValue, dealValueNum, probability, created, industry, location, website, notes, businessDescription, companySize, annualRevenue, businessModel, userId)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [l.id, l.name, l.initials, l.company, l.title, l.email, l.phone, l.status, l.priority, l.score, l.source, l.owner, l.ownerInitials, l.lastContact, l.nextFollowup, l.dealValue, l.dealValueNum, l.probability, l.created, l.industry, l.location, l.website, l.notes || '', l.businessDescription || '', l.companySize || '', l.annualRevenue || '', l.businessModel || '', l.userId]
       );
     }
-
-    // Seed deals
-    for (const d of seedData.DEALS_SEED) {
-      await db.run(
-        `INSERT INTO deals (id, deal, company, value, score, priority, owner, ownerFull, close, last, next, stage, probability)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [d.id, d.deal, d.company, d.value, d.score, d.priority, d.owner, d.ownerFull, d.close, d.last, d.next, d.stage, d.probability]
-      );
+    if (INITIAL_STORE.team_members) {
+      for (const tm of INITIAL_STORE.team_members) {
+        await db.run(
+          `INSERT INTO team_members (id, teamId, name, initials, role, email, phone, tag, leads, calls, meetings, conv, revenue, won, lost, status, created, userId)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [tm.id, tm.teamId, tm.name, tm.initials, tm.role, tm.email, tm.phone, tm.tag, tm.leads, tm.calls, tm.meetings, tm.conv, tm.revenue, tm.won, tm.lost, tm.status, tm.created, tm.userId]
+        );
+      }
     }
-
-    // Seed customers
-    for (const c of seedData.CUSTOMERS_SEED) {
-      await db.run(
-        `INSERT INTO customers (id, name, initials, company, title, email, phone, status, owner, totalRevenue, lastContact, joinDate, industry, location)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [c.id, c.name, c.initials, c.company, c.title, c.email, c.phone, c.status, c.owner, c.totalRevenue, c.lastContact, c.joinDate, c.industry, c.location]
-      );
+    if (INITIAL_STORE.activities) {
+      for (const a of INITIAL_STORE.activities) {
+        await db.run(
+          `INSERT INTO activities (id, type, contact, company, description, date, time, owner, userId)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [a.id, a.type, a.contact, a.company, a.description, a.date, a.time, a.owner, a.userId]
+        );
+      }
     }
-
-    // Seed companies
-    for (const co of seedData.COMPANIES_SEED) {
-      await db.run(
-        `INSERT INTO companies (id, name, industry, location, contacts, deals, revenue, website, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [co.id, co.name, co.industry, co.location, co.contacts, co.deals, co.revenue, co.website, co.status]
-      );
+    if (INITIAL_STORE.calls) {
+      for (const cl of INITIAL_STORE.calls) {
+        await db.run(
+          `INSERT INTO calls (id, contact, company, date, time, duration, outcome, notes, owner, userId)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [cl.id, cl.contact, cl.company, cl.date, cl.time, cl.duration, cl.outcome, cl.notes, cl.owner, cl.userId]
+        );
+      }
     }
-
-    // Seed tasks
-    for (const t of seedData.TASKS_SEED) {
-      await db.run(
-        `INSERT INTO tasks (id, title, linkedLead, dueDate, priority, owner, completed, created)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [t.id, t.title, t.linkedLead, t.dueDate, t.priority, t.owner, t.completed ? 1 : 0, t.created]
-      );
-    }
-
-    // Seed calls
-    for (const cl of seedData.CALLS_SEED) {
-      await db.run(
-        `INSERT INTO calls (id, contact, company, date, time, duration, outcome, notes, owner)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [cl.id, cl.contact, cl.company, cl.date, cl.time, cl.duration, cl.outcome, cl.notes, cl.owner]
-      );
-    }
-
-    // Seed meetings
-    for (const m of seedData.MEETINGS_SEED) {
-      await db.run(
-        `INSERT INTO meetings (id, title, contact, company, date, time, duration, type, outcome, owner, attendees)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [m.id, m.title, m.contact, m.company, m.date, m.time, m.duration, m.type, m.outcome, m.owner, JSON.stringify(m.attendees || [])]
-      );
-    }
-
-    // Seed activities
-    for (const a of seedData.ACTIVITIES_SEED) {
-      await db.run(
-        `INSERT INTO activities (id, type, contact, company, description, date, time, owner)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [a.id, a.type, a.contact, a.company, a.description, a.date, a.time, a.owner]
-      );
-    }
-
-
-
-    // Seed automations
-    for (const au of seedData.AUTOMATIONS_SEED) {
-      await db.run(
-        `INSERT INTO automations (id, name, trigger, action, status, triggered)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [au.id, au.name, au.trigger, au.action, au.status, au.triggered]
-      );
-    }
-
-    // Seed campaigns
-    for (const cam of seedData.CAMPAIGNS_SEED) {
-      await db.run(
-        `INSERT INTO campaigns (id, name, type, status, sent, opened, clicked, openRate, clickRate, created)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [cam.id, cam.name, cam.type, cam.status, cam.sent, cam.opened, cam.clicked, cam.openRate, cam.clickRate, cam.created]
-      );
-    }
-
-    // Seed notifications
-    await db.run(`INSERT INTO notifications (id, type, text, time, read) VALUES ('N-1', 'alert', 'Deal Kavach ERP Rollout idle for 8 days', '2h ago', 0)`);
-    await db.run(`INSERT INTO notifications (id, type, text, time, read) VALUES ('N-2', 'task', '3 tasks are overdue today', '4h ago', 0)`);
   }
 }

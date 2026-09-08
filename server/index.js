@@ -297,41 +297,30 @@ app.get('/api/crm/state', async (req, res) => {
         }
       }
 
-      // Leaders can see data for all users in their organization
-      const orgMembers = await db.all('SELECT id FROM users WHERE orgId = ?', [user.orgId]);
-      let allowedUserIds = orgMembers.map(m => m.id);
-
-      // Ensure the leader's own ID is included
-      if (!allowedUserIds.includes(userId)) {
-        allowedUserIds.push(userId);
-      }
-
-      // Dynamic placeholders helper
-      const placeholders = allowedUserIds.map(() => '?').join(',');
-
-      leads = await db.all(`SELECT * FROM leads WHERE userId IN (${placeholders}) ORDER BY rowid DESC`, allowedUserIds);
-      deals = await db.all(`SELECT * FROM deals WHERE userId IN (${placeholders}) ORDER BY rowid DESC`, allowedUserIds);
-      customers = await db.all(`SELECT * FROM customers WHERE userId IN (${placeholders}) ORDER BY rowid DESC`, allowedUserIds);
-      companies = await db.all(`SELECT * FROM companies WHERE userId IN (${placeholders}) ORDER BY rowid DESC`, allowedUserIds);
-      tasks = await db.all(`SELECT * FROM tasks WHERE userId IN (${placeholders}) ORDER BY rowid DESC`, allowedUserIds);
-      calls = await db.all(`SELECT * FROM calls WHERE userId IN (${placeholders}) ORDER BY rowid DESC`, allowedUserIds);
-      meetings = await db.all(`SELECT * FROM meetings WHERE userId IN (${placeholders}) ORDER BY rowid DESC`, allowedUserIds);
-      activities = await db.all(`SELECT * FROM activities WHERE userId IN (${placeholders}) ORDER BY rowid DESC`, allowedUserIds);
-      automations = await db.all(`SELECT * FROM automations WHERE userId IN (${placeholders}) ORDER BY rowid DESC`, allowedUserIds);
-      campaigns = await db.all(`SELECT * FROM campaigns WHERE userId IN (${placeholders}) ORDER BY rowid DESC`, allowedUserIds);
-      notifications = await db.all(`SELECT * FROM notifications WHERE userId IN (${placeholders}) ORDER BY rowid DESC`, allowedUserIds);
-      integrations = await db.all(`SELECT * FROM integrations WHERE userId IN (${placeholders}) ORDER BY rowid DESC`, allowedUserIds);
-      teams = await db.all(`SELECT * FROM teams WHERE userId IN (${placeholders}) ORDER BY rowid DESC`, allowedUserIds);
+      // Leaders see all data across the CRM organization
+      leads = await db.all('SELECT * FROM leads ORDER BY rowid DESC');
+      deals = await db.all('SELECT * FROM deals ORDER BY rowid DESC');
+      customers = await db.all('SELECT * FROM customers ORDER BY rowid DESC');
+      companies = await db.all('SELECT * FROM companies ORDER BY rowid DESC');
+      tasks = await db.all('SELECT * FROM tasks ORDER BY rowid DESC');
+      calls = await db.all('SELECT * FROM calls ORDER BY rowid DESC');
+      meetings = await db.all('SELECT * FROM meetings ORDER BY rowid DESC');
+      activities = await db.all('SELECT * FROM activities ORDER BY rowid DESC');
+      automations = await db.all('SELECT * FROM automations ORDER BY rowid DESC');
+      campaigns = await db.all('SELECT * FROM campaigns ORDER BY rowid DESC');
+      notifications = await db.all('SELECT * FROM notifications ORDER BY rowid DESC');
+      integrations = await db.all('SELECT * FROM integrations ORDER BY rowid DESC');
+      teams = await db.all('SELECT * FROM teams ORDER BY rowid DESC');
     } else {
-      // Members see ONLY their own created records (userId = their ID)
-      // owner/ownerInitials are display-only fields, NOT assignment keys — do NOT use them for filtering
+      // Members see their records (by userId or matching owner name)
+      const memberOwnerPattern = user ? `%${user.name.toLowerCase()}%` : '%';
       leads = await db.all(
-        `SELECT * FROM leads WHERE userId = ? ORDER BY rowid DESC`,
-        [userId]
+        `SELECT * FROM leads WHERE userId = ? OR LOWER(owner) LIKE ? ORDER BY rowid DESC`,
+        [userId, memberOwnerPattern]
       );
       deals = await db.all(
-        `SELECT * FROM deals WHERE userId = ? ORDER BY rowid DESC`,
-        [userId]
+        `SELECT * FROM deals WHERE userId = ? OR LOWER(owner) LIKE ? ORDER BY rowid DESC`,
+        [userId, memberOwnerPattern]
       );
       customers = await db.all(
         `SELECT * FROM customers WHERE userId = ? ORDER BY rowid DESC`,
