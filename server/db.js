@@ -70,11 +70,41 @@ export async function getDb() {
 }
 
 function createMemoryFallbackDb() {
-  const store = JSON.parse(JSON.stringify(INITIAL_STORE || {}));
+  const TMP_STORE_PATH = path.join('/tmp', 'saivyy_store.json');
+  let store;
+  try {
+    if (fs.existsSync(TMP_STORE_PATH)) {
+      const saved = JSON.parse(fs.readFileSync(TMP_STORE_PATH, 'utf8'));
+      store = { ...INITIAL_STORE, ...saved };
+      if (!store.users) store.users = [];
+      for (const u of (INITIAL_STORE.users || [])) {
+        if (!store.users.some(su => su.id === u.id || (su.email && u.email && su.email.toLowerCase() === u.email.toLowerCase()))) {
+          store.users.push(u);
+        }
+      }
+      if (!store.leads || store.leads.length === 0) {
+        store.leads = [...(INITIAL_STORE.leads || [])];
+      }
+    } else {
+      store = JSON.parse(JSON.stringify(INITIAL_STORE || {}));
+    }
+  } catch (e) {
+    store = JSON.parse(JSON.stringify(INITIAL_STORE || {}));
+  }
+
   const tables = ['users', 'leads', 'deals', 'customers', 'companies', 'teams', 'team_members', 'tasks', 'calls', 'meetings', 'activities', 'automations', 'campaigns', 'notifications', 'integrations'];
   for (const t of tables) {
     if (!store[t]) store[t] = [];
   }
+
+  function saveStore() {
+    try {
+      fs.writeFileSync(TMP_STORE_PATH, JSON.stringify(store));
+    } catch (e) {
+      // Ignore if /tmp is not writable
+    }
+  }
+
   const DEFAULT_ORG_ID = 'ORG-saivyy-default';
   const DEFAULT_USER_ID = 'U-117bb402-3724-4580-9da9-01311b759889';
 
@@ -184,41 +214,85 @@ function createMemoryFallbackDb() {
       const table = getTableName(sql);
       if (table && !store[table]) store[table] = [];
 
-      if (clean.toUpperCase().startsWith('INSERT INTO')) {
+      if (clean.toUpperCase().startsWith('INSERT INTO') && table) {
         const newObj = {};
-        if (params.length > 0 && table) {
-          if (table === 'users') {
-            newObj.id = params[0] || `U-${Date.now()}`;
-            newObj.name = params[1] || 'User';
-            newObj.email = params[2] || 'user@example.com';
-            newObj.password = params[3] || 'Password123';
-            newObj.role = params[4] || 'Member';
-            newObj.orgName = params[5] || 'Saivyy Technologies Private Limited';
-            newObj.orgId = params[6] || DEFAULT_ORG_ID;
-            newObj.created = params[7] || new Date().toISOString();
-          } else if (params[0]) {
-            newObj.id = params[0];
-            newObj.name = params[1] || 'Item';
-            newObj.userId = params[params.length - 1] || DEFAULT_USER_ID;
-            newObj.created = new Date().toISOString();
+        const colMatch = clean.match(/INSERT\s+INTO\s+[a-z0-9_]+\s*\(([^)]+)\)/i);
+        const valMatch = clean.match(/VALUES\s*\((.+)\)/i);
+        if (colMatch && valMatch) {
+          const cols = colMatch[1].split(',').map(c => c.trim().replace(/["`]/g, ''));
+          const valTokens = valMatch[1].split(',').map(v => v.trim());
+          let pIdx = 0;
+          for (let i = 0; i < cols.length; i++) {
+            const col = cols[i];
+            const token = valTokens[i] || '?';
+            if (token === '?') {
+              newObj[col] = params[pIdx++] ?? null;
+            } else {
+              let lit = token.replace(/^['"]|['"]$/g, '');
+              if (/^\d+$/.test(lit)) lit = Number(lit);
+              newObj[col] = lit;
+            }
           }
+        } else if (params.length > 0) {
+          newObj.id = params[0];
+          newObj.name = params[1] || 'Item';
+          newObj.userId = params[params.length - 1] || DEFAULT_USER_ID;
+          newObj.created = new Date().toISOString();
         }
-        if (newObj.id && table) {
+        if (newObj.id) {
           store[table].unshift(newObj);
+          saveStore();
         }
       } else if (clean.toUpperCase().startsWith('UPDATE') && table) {
-        if (clean.includes('WHERE id = ?')) {
-          const id = params[params.length - 1];
-          const item = (store[table] || []).find(r => r.id === id);
-          if (item) {
-            item.updated = true;
+        const setMatch = clean.match(/UPDATE\s+[a-z0-9_]+\s+SET\s+(.+?)\s+WHERE\s+(.+)/i);
+        if (setMatch) {
+          const setClause = setMatch[1];
+          const whereClause = setMatch[2];
+          const setTokens = setClause.split(',').map(s => s.trim());
+          const numSetParams = setTokens.filter(s => s.includes('?')).length;
+          const setParams = params.slice(0, numSetParams);
+          const whereParams = params.slice(numSetParams);
+
+          let targets = store[table] || [];
+          if (whereClause.includes('id = ?')) {
+            const id = whereParams[whereParams.length - 1] || whereParams[0];
+            targets = targets.filter(r => r.id === id);
+          } else if (/email/i.test(whereClause)) {
+            const emailParam = whereParams[0];
+            if (emailParam) targets = targets.filter(r => r.email && r.email.toLowerCase() === String(emailParam).toLowerCase());
           }
+
+          let pIdx = 0;
+          const updates = {};
+          for (const token of setTokens) {
+            const parts = token.split('=').map(p => p.trim());
+            const col = parts[0].replace(/["`]/g, '');
+            if (parts[1] === '?') {
+              updates[col] = setParams[pIdx++];
+            } else if (parts[1]) {
+              let val = parts[1].replace(/^['"]|['"]$/g, '');
+              if (/^\d+$/.test(val)) val = Number(val);
+              updates[col] = val;
+            }
+          }
+
+          for (const item of targets) {
+            Object.assign(item, updates);
+          }
+          saveStore();
         }
       } else if (clean.toUpperCase().startsWith('DELETE') && table) {
         if (clean.includes('WHERE id = ?')) {
           const id = params[0];
           if (store[table]) {
             store[table] = store[table].filter(r => r.id !== id);
+            saveStore();
+          }
+        } else if (clean.includes('WHERE teamId = ?')) {
+          const teamId = params[0];
+          if (store[table]) {
+            store[table] = store[table].filter(r => r.teamId !== teamId);
+            saveStore();
           }
         }
       }
