@@ -1,6 +1,7 @@
 import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -11,8 +12,23 @@ let dbInstance = null;
 export async function getDb() {
   if (dbInstance) return dbInstance;
 
+  let dbPath = path.join(__dirname, 'crm.sqlite');
+
+  // On Vercel / serverless environment, copy DB to writable /tmp directory
+  if (process.env.VERCEL || process.env.NODE_ENV === 'production') {
+    const tmpPath = path.join('/tmp', 'crm.sqlite');
+    try {
+      if (!fs.existsSync(tmpPath) && fs.existsSync(dbPath)) {
+        fs.copyFileSync(dbPath, tmpPath);
+      }
+      dbPath = tmpPath;
+    } catch (e) {
+      console.warn("Could not copy sqlite DB to /tmp, using default path:", e);
+    }
+  }
+
   dbInstance = await open({
-    filename: path.join(__dirname, 'crm.sqlite'),
+    filename: dbPath,
     driver: sqlite3.Database
   });
 

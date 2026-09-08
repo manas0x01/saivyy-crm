@@ -1155,6 +1155,10 @@ app.use((req, res, next) => {
   res.sendFile(path.join(distPath, 'index.html'));
 });
 
-app.listen(PORT, () => {
-  console.log(`⚡ Saivyy CRM REST API server running at http://localhost:${PORT}`);
-});
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`⚡ Saivyy CRM REST API server running at http://localhost:${PORT}`);
+  });
+}
+
+export default app;
