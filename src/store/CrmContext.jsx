@@ -31,6 +31,8 @@ function reducer(state, action) {
     // --- LEADS ---
     case "ADD_LEAD":
       return { ...state, leads: [action.payload, ...state.leads] };
+    case "ADD_LEADS":
+      return { ...state, leads: [...(Array.isArray(action.payload) ? action.payload : []), ...state.leads] };
     case "UPDATE_LEAD":
       return { ...state, leads: state.leads.map(l => l.id === action.payload.id ? { ...l, ...action.payload } : l) };
     case "DELETE_LEAD":

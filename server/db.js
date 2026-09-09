@@ -1,4 +1,4 @@
-﻿import path from 'path';
+import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { INITIAL_STORE } from './initialStore.js';
@@ -333,7 +333,7 @@ function createMemoryFallbackDb() {
           newObj.userId = params[params.length - 1] || DEFAULT_USER_ID;
           newObj.created = new Date().toISOString();
         }
-        if (newObj.id) { store[table].unshift(newObj); saveStore(); }
+        if (newObj.id) { store[table].push(newObj); saveStore(); }
       } else if (clean.toUpperCase().startsWith('UPDATE') && table) {
         const setMatch = clean.match(/UPDATE\s+[a-z0-9_]+\s+SET\s+(.+?)\s+WHERE\s+(.+)/i);
         if (setMatch) {
@@ -417,6 +417,10 @@ async function initDb(db) {
       location TEXT,
       website TEXT,
       notes TEXT,
+      businessDescription TEXT,
+      companySize TEXT,
+      annualRevenue TEXT,
+      businessModel TEXT,
       userId TEXT
     );
     CREATE TABLE IF NOT EXISTS deals (
@@ -615,7 +619,7 @@ async function initDb(db) {
     await db.run(`UPDATE users SET orgId = ? WHERE (orgId IS NULL OR orgId = '')`, [DEFAULT_ORG_ID]);
   } catch(e) {}
 
-  // Column migrations for local SQLite
+  // Column migrations for local SQLite (PRAGMA-based)
   if (!db._isTurso) {
     const tables = ['leads', 'deals', 'customers', 'companies', 'teams', 'team_members', 'tasks', 'calls', 'meetings', 'activities', 'automations', 'campaigns', 'notifications', 'integrations'];
     for (const table of tables) {
@@ -633,7 +637,27 @@ async function initDb(db) {
       if (!colNames.includes('companySize')) await db.run('ALTER TABLE leads ADD COLUMN companySize TEXT');
       if (!colNames.includes('annualRevenue')) await db.run('ALTER TABLE leads ADD COLUMN annualRevenue TEXT');
       if (!colNames.includes('businessModel')) await db.run('ALTER TABLE leads ADD COLUMN businessModel TEXT');
+      if (!colNames.includes('ownerInitials')) await db.run('ALTER TABLE leads ADD COLUMN ownerInitials TEXT');
     } catch (e) {}
+  }
+
+  // Column migrations for Turso cloud (try/catch each ALTER — Turso throws if column already exists)
+  if (db._isTurso) {
+    const tursoLeadMigrations = [
+      'ALTER TABLE leads ADD COLUMN businessDescription TEXT',
+      'ALTER TABLE leads ADD COLUMN companySize TEXT',
+      'ALTER TABLE leads ADD COLUMN annualRevenue TEXT',
+      'ALTER TABLE leads ADD COLUMN businessModel TEXT',
+      'ALTER TABLE leads ADD COLUMN ownerInitials TEXT',
+    ];
+    for (const stmt of tursoLeadMigrations) {
+      try { await db.run(stmt); } catch (_) { /* column already exists — ignore */ }
+    }
+    // Also ensure userId column exists on all tables
+    const allTables = ['leads', 'deals', 'customers', 'companies', 'teams', 'team_members', 'tasks', 'calls', 'meetings', 'activities', 'automations', 'campaigns', 'notifications', 'integrations'];
+    for (const t of allTables) {
+      try { await db.run(`ALTER TABLE ${t} ADD COLUMN userId TEXT`); } catch (_) {}
+    }
   }
 
   // Set default userId

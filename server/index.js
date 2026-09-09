@@ -300,7 +300,7 @@ app.get('/api/crm/state', async (req, res) => {
       }
 
       // Leaders see all data across the CRM organization
-      leads = await db.all('SELECT * FROM leads ORDER BY rowid ASC');
+      leads = await db.all('SELECT * FROM leads ORDER BY rowid DESC');
       deals = await db.all('SELECT * FROM deals ORDER BY rowid DESC');
       customers = await db.all('SELECT * FROM customers ORDER BY rowid DESC');
       companies = await db.all('SELECT * FROM companies ORDER BY rowid DESC');
@@ -317,7 +317,7 @@ app.get('/api/crm/state', async (req, res) => {
       // Members see their records (by userId or matching owner name)
       const memberOwnerPattern = user ? `%${user.name.toLowerCase()}%` : '%';
       leads = await db.all(
-        `SELECT * FROM leads WHERE userId = ? OR LOWER(owner) LIKE ? ORDER BY rowid ASC`,
+        `SELECT * FROM leads WHERE userId = ? OR LOWER(owner) LIKE ? ORDER BY rowid DESC`,
         [userId, memberOwnerPattern]
       );
       deals = await db.all(
@@ -449,6 +449,51 @@ app.post('/api/leads', async (req, res) => {
     );
     const newLead = await db.get('SELECT * FROM leads WHERE id = ?', [id]);
     res.json(newLead);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Bulk import endpoint — inserts many leads in one request (used by Excel import for speed)
+app.post('/api/leads/bulk', async (req, res) => {
+  try {
+    const db = await getDb();
+    const leads = req.body;
+    const requesterId = req.headers['x-user-id'] || 'U-admin';
+    if (!Array.isArray(leads) || leads.length === 0) {
+      return res.status(400).json({ error: 'Body must be a non-empty array of leads' });
+    }
+
+    // Resolve permission once
+    let requesterRole = 'Member';
+    let requesterOrgId = null;
+    try {
+      const requester = await db.get('SELECT role, orgId FROM users WHERE id = ?', [requesterId]);
+      if (requester) { requesterRole = requester.role; requesterOrgId = requester.orgId; }
+    } catch (_) {}
+
+    let insertedCount = 0;
+    // Insert in reverse order so that ORDER BY rowid DESC retrieves them in original Excel row order (Row 1 on top)
+    const reversedLeads = [...leads].reverse();
+    for (const l of reversedLeads) {
+      try {
+        const id = l.id || generateId('L');
+        let userId = requesterId;
+        if (l.assignedUserId && l.assignedUserId !== requesterId && (requesterRole === 'Leader' || requesterRole === 'Admin')) {
+          const target = await db.get('SELECT id FROM users WHERE id = ? AND orgId = ?', [l.assignedUserId, requesterOrgId]);
+          if (target) userId = l.assignedUserId;
+        }
+        await db.run(
+          `INSERT INTO leads (id, name, initials, company, title, email, phone, status, priority, score, source, owner, ownerInitials, lastContact, nextFollowup, dealValue, dealValueNum, probability, created, industry, location, website, notes, businessDescription, companySize, annualRevenue, businessModel, userId)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [id, l.name, l.initials, l.company, l.title, l.email, l.phone, l.status, l.priority, l.score ?? 40, l.source, l.owner, l.ownerInitials, l.lastContact, l.nextFollowup, l.dealValue, l.dealValueNum ?? 0, l.probability ?? 100, l.created, l.industry, l.location, l.website, l.notes || '', l.businessDescription || '', l.companySize || '', l.annualRevenue || '', l.businessModel || '', userId]
+        );
+        insertedCount++;
+      } catch (rowErr) {
+        console.error('Bulk insert row error:', rowErr.message);
+      }
+    }
+    res.json({ success: true, inserted: insertedCount, total: leads.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

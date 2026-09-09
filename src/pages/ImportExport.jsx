@@ -1,12 +1,14 @@
 import React, { useState, useRef, useMemo, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import {
-  Upload, Download, FileSpreadsheet, CheckCircle, FileDown, Database, Users, Crown
+  Upload, Download, FileSpreadsheet, CheckCircle, FileDown, Database, Users, Crown, ArrowRight
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { T } from "../tokens";
 import { useCrm } from "../store/CrmContext";
 import { useAuth } from "../store/AuthContext";
 import { FormField, Input } from "../components/Modal";
+import { bulkCreateLeads } from "../services/api";
 
 // Case-insensitive flexible key locator
 function findRowValue(row, possibleKeys, fallbackIndex = -1) {
@@ -69,6 +71,7 @@ function createLeadId() {
 }
 
 export default function ImportExport() {
+  const navigate = useNavigate();
   const { state, dispatch } = useCrm();
   const { user, fetchOrgMembers } = useAuth();
 
@@ -245,38 +248,50 @@ export default function ImportExport() {
     };
   };
 
-  // File import confirm
+  // File import confirm — single bulk API call for max speed
   const confirmImport = async () => {
     if (!fileData || fileData.length === 0) return alert("No file rows to import");
     setImporting(true);
-    let count = 0;
-    let skipped = 0;
+    let skippedNoName = 0;
+
+    // Build all valid payloads first
+    const payloads = [];
     for (const row of fileData) {
       const name = findRowValue(row, ["name", "fullname", "leadname", "contact", "person", "firstname", "customer"], 0);
-      if (!name) continue;
+      if (!name) { skippedNoName++; continue; }
       const company = findRowValue(row, ["company", "companyname", "organization", "org", "business", "firm"], 1) || "Direct Client";
-      const payload = buildLeadPayload(name, company, row, "Excel Import");
-      if (!payload.phone) {
-        skipped++;
-        continue;
-      }
-      await dispatch({ type: "ADD_LEAD", payload });
-      count++;
+      payloads.push(buildLeadPayload(name, company, row, "Excel Import"));
     }
+
+    // 1. Immediately update local CRM state for instant UI feedback (preserves original Excel order)
+    dispatch({ type: "ADD_LEADS", payload: payloads });
+
+    // 2. Send all to backend in a single HTTP request
+    try {
+      const res = await bulkCreateLeads(payloads);
+      if (res && res.error) {
+        console.error("Bulk import API error:", res.error);
+        alert(`Warning: Server reported an issue importing leads: ${res.error}`);
+      }
+    } catch (err) {
+      console.error("Bulk import API error:", err);
+      alert(`Import error: ${err.message || "Failed to persist leads to database"}`);
+    }
+
     setImporting(false);
-    setImportedCount(count);
+    setImportedCount(payloads.length);
     setFileData(null);
     setFileName("");
-    if (skipped > 0) alert(`Imported ${count} leads. Skipped ${skipped} rows without valid mobile numbers.`);
+    if (skippedNoName > 0) alert(`Imported ${payloads.length} leads. Skipped ${skippedNoName} rows with no name.`);
   };
 
-  // Text paste import
+  // Text paste import — single bulk API call
   const handleTextImport = async () => {
     if (!csvText.trim()) return alert("Paste CSV or tab-separated text first");
     setImporting(true);
     const lines = csvText.trim().split("\n");
-    let count = 0;
-    let skipped = 0;
+    const payloads = [];
+
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
       if (!line) continue;
@@ -290,18 +305,27 @@ export default function ImportExport() {
       if (!name) continue;
       const company = parts[1] || "Direct Client";
       const rowObj = { Name: name, Company: company, Email: parts[2] || "", Phone: parts[3] || "", Status: parts[4] || "" };
-      const payload = buildLeadPayload(name, company, rowObj, "Pasted CSV");
-      if (!payload.phone) {
-        skipped++;
-        continue;
-      }
-      await dispatch({ type: "ADD_LEAD", payload });
-      count++;
+      payloads.push(buildLeadPayload(name, company, rowObj, "Pasted CSV"));
     }
+
+    // Immediately update local state (preserves row order)
+    dispatch({ type: "ADD_LEADS", payload: payloads });
+
+    // Send to backend in one request
+    try {
+      const res = await bulkCreateLeads(payloads);
+      if (res && res.error) {
+        console.error("Bulk import API error:", res.error);
+        alert(`Warning: Server reported an issue importing leads: ${res.error}`);
+      }
+    } catch (err) {
+      console.error("Bulk import API error:", err);
+      alert(`Import error: ${err.message || "Failed to persist leads to database"}`);
+    }
+
     setImporting(false);
-    setImportedCount(count);
+    setImportedCount(payloads.length);
     setCsvText("");
-    if (skipped > 0) alert(`Imported ${count} leads. Skipped ${skipped} rows without valid mobile numbers.`);
   };
 
   // Download Sample Excel Template
@@ -572,7 +596,7 @@ export default function ImportExport() {
                     style={{ background: T.accent, color: "#fff", opacity: importing ? 0.7 : 1 }}
                   >
                     <Upload size={14} className={importing ? "animate-spin" : ""} />
-                    {importing ? "Importing…" : `Import ${fileData.length} Leads into SQLite`}
+                    {importing ? `Importing ${fileData.length} leads…` : `Import ${fileData.length} Leads`}
                   </button>
                 </div>
               )}
@@ -604,20 +628,29 @@ export default function ImportExport() {
           )}
 
           {importedCount !== null && (
-            <div className="p-3 rounded-lg flex items-center gap-2 text-[12.5px]" style={{ background: T.positiveSoft, color: T.positive }}>
-              <CheckCircle size={16} />
-              <span>
-                <strong>{importedCount} leads</strong> imported successfully!
-                <span className="ml-1">Assigned to{" "}
-                  <strong>
-                    {assignToUserId === "self"
-                      ? `${user?.name || "Leader"} (you)`
-                      : (assignableMembers.find(e => e.id === assignToUserId || e.userId === assignToUserId || e.rawId === assignToUserId)?.name || "team member")}
-                  </strong>.
+            <div className="p-3.5 rounded-lg flex items-center justify-between gap-3 text-[12.5px]" style={{ background: T.positiveSoft, color: T.positive }}>
+              <div className="flex items-center gap-2">
+                <CheckCircle size={18} className="shrink-0" />
+                <span>
+                  <strong>{importedCount} leads</strong> imported successfully!
+                  <span className="ml-1">Assigned to{" "}
+                    <strong>
+                      {assignToUserId === "self"
+                        ? `${user?.name || "Leader"} (you)`
+                        : (assignableMembers.find(e => e.id === assignToUserId || e.userId === assignToUserId || e.rawId === assignToUserId)?.name || "team member")}
+                    </strong>.
+                  </span>
+                  {importProbability && <span className="ml-1">Probability: <strong>{importProbability}%</strong>.</span>}
+                  {importDealValue && <span className="ml-1">Deal value: <strong>₹{importDealValue}</strong>.</span>}
                 </span>
-                {importProbability && <span className="ml-1">Probability: <strong>{importProbability}%</strong>.</span>}
-                {importDealValue && <span className="ml-1">Deal value: <strong>₹{importDealValue}</strong>.</span>}
-              </span>
+              </div>
+              <button
+                onClick={() => navigate("/leads")}
+                className="crm-focusable px-3 py-1.5 rounded-md text-[12px] font-semibold flex items-center gap-1.5 shrink-0 shadow-sm hover:opacity-95"
+                style={{ background: T.positive, color: "#fff" }}
+              >
+                Go to Leads <ArrowRight size={14} />
+              </button>
             </div>
           )}
         </div>
