@@ -9,7 +9,149 @@ const __dirname = path.dirname(__filename);
 let dbInstance = null;
 const DEFAULT_ORG_ID = 'ORG-saivyy-default';
 
-// ─── Local SQLite Driver ───────────────────────────────────────────────────
+// ─── camelCase mapping (PostgreSQL folds unquoted column names to lowercase) ──
+// When we SELECT *, pg returns e.g. "orgid" instead of "orgId".
+// This map restores the correct camelCase key names.
+const PG_COL_CAMEL = {
+  orgname:             'orgName',
+  orgid:               'orgId',
+  lastcontact:         'lastContact',
+  nextfollowup:        'nextFollowup',
+  dealvalue:           'dealValue',
+  dealvaluenum:        'dealValueNum',
+  businessdescription: 'businessDescription',
+  companysize:         'companySize',
+  annualrevenue:       'annualRevenue',
+  businessmodel:       'businessModel',
+  ownerinitials:       'ownerInitials',
+  userid:              'userId',
+  ownerfull:           'ownerFull',
+  totalrevenue:        'totalRevenue',
+  joindate:            'joinDate',
+  teamid:              'teamId',
+  linkedlead:          'linkedLead',
+  duedate:             'dueDate',
+  openrate:            'openRate',
+  clickrate:           'clickRate',
+  apikey:              'apiKey',
+  webhookurl:          'webhookUrl',
+  lastsync:            'lastSync',
+  teamname:            'teamName',
+  accountuserid:       'accountUserId',
+  isleader:            'isLeader',
+  haslogin:            'hasLogin',
+};
+
+function mapRow(row) {
+  if (!row || typeof row !== 'object') return row;
+  const out = {};
+  for (const [k, v] of Object.entries(row)) {
+    out[PG_COL_CAMEL[k] || k] = v;
+  }
+  return out;
+}
+
+// ─── PostgreSQL Wrapper ───────────────────────────────────────────────────────
+// Wraps pg.Pool to expose the same .get()/.all()/.run()/.exec() API as sqlite.
+// Also handles:
+//   - ? → $1, $2, ... parameter conversion
+//   - SQLite rowid → id replacement
+//   - PRAGMA table_info → information_schema.columns
+//   - Duplicate key errors (code 23505) treated as no-ops (safe seeding)
+class PgWrapper {
+  constructor(pool) {
+    this.pool = pool;
+  }
+
+  _convert(sql, params = []) {
+    let i = 0;
+    let pgSql = String(sql)
+      // Replace ? with $1, $2, ...
+      .replace(/\?/g, () => `$${++i}`)
+      // SQLite-specific rowid → id (used in ORDER BY rowid DESC/ASC)
+      .replace(/\browid\b/gi, 'id');
+    return pgSql;
+  }
+
+  async _pragmaInfo(tableName) {
+    try {
+      const r = await this.pool.query(
+        `SELECT column_name AS name
+         FROM information_schema.columns
+         WHERE table_name = $1 AND table_schema = 'public'
+         ORDER BY ordinal_position`,
+        [tableName.toLowerCase()]
+      );
+      return r.rows;
+    } catch (e) {
+      return [];
+    }
+  }
+
+  async exec(sql) {
+    // Split multi-statement SQL (CREATE TABLE IF NOT EXISTS blocks)
+    const statements = String(sql).split(';').map(s => s.trim()).filter(Boolean);
+    for (const stmt of statements) {
+      try {
+        await this.pool.query(stmt);
+      } catch (e) {
+        if (!e.message.includes('already exists')) {
+          console.error('pg exec error:', e.message);
+        }
+      }
+    }
+  }
+
+  async get(sql, params = []) {
+    const trimmed = String(sql).trim().toUpperCase();
+    if (trimmed.startsWith('PRAGMA')) {
+      const m = sql.match(/PRAGMA\s+table_info\((\w+)\)/i);
+      if (!m) return undefined;
+      const rows = await this._pragmaInfo(m[1]);
+      return rows[0];
+    }
+    try {
+      const pgSql = this._convert(sql, params);
+      const r = await this.pool.query(pgSql, params);
+      return mapRow(r.rows[0]) || undefined;
+    } catch (e) {
+      console.error('pg get error:', e.message, '\nSQL:', sql);
+      throw e;
+    }
+  }
+
+  async all(sql, params = []) {
+    const trimmed = String(sql).trim().toUpperCase();
+    if (trimmed.startsWith('PRAGMA')) {
+      const m = sql.match(/PRAGMA\s+table_info\((\w+)\)/i);
+      if (!m) return [];
+      return await this._pragmaInfo(m[1]);
+    }
+    try {
+      const pgSql = this._convert(sql, params);
+      const r = await this.pool.query(pgSql, params);
+      return r.rows.map(mapRow);
+    } catch (e) {
+      console.error('pg all error:', e.message, '\nSQL:', sql);
+      throw e;
+    }
+  }
+
+  async run(sql, params = []) {
+    try {
+      const pgSql = this._convert(sql, params);
+      const r = await this.pool.query(pgSql, params);
+      return { changes: r.rowCount || 0 };
+    } catch (e) {
+      // Ignore unique constraint violations (safe to re-seed)
+      if (e.code === '23505') return { changes: 0 };
+      console.error('pg run error:', e.message, '\nSQL:', sql);
+      throw e;
+    }
+  }
+}
+
+// ─── Local SQLite Driver ──────────────────────────────────────────────────────
 async function loadSqliteDriver() {
   try {
     const sqlite3Mod = await import('sqlite3');
@@ -23,58 +165,85 @@ async function loadSqliteDriver() {
   }
 }
 
-// ─── Main getDb() — Local SQLite (crm.sqlite) with JS in-memory fallback ──
+// ─── Main getDb() ─────────────────────────────────────────────────────────────
+// Priority:
+//   1. DATABASE_URL env var → PostgreSQL (Neon / any pg-compatible)  [PRODUCTION]
+//   2. Local SQLite file (server/crm.sqlite)                          [DEVELOPMENT]
+//   3. In-memory SQLite fallback                                      [CI/TEST]
+//   4. JS in-memory fallback (no native modules)                      [LAST RESORT]
 export async function getDb() {
   if (dbInstance) return dbInstance;
 
-  // Primary: Local SQLite file
-  const driverObj = await loadSqliteDriver();
-
-  if (driverObj && driverObj.open && driverObj.sqlite3) {
-    let dbPath = path.join(__dirname, 'crm.sqlite');
-
-    if (process.env.VERCEL || process.env.NODE_ENV === 'production') {
-      const tmpPath = path.join('/tmp', 'crm.sqlite');
-      try {
-        if (!fs.existsSync(tmpPath) && fs.existsSync(dbPath)) {
-          fs.copyFileSync(dbPath, tmpPath);
-        }
-        dbPath = tmpPath;
-      } catch (e) {
-        console.warn('Could not copy sqlite DB to /tmp:', e);
-      }
-    }
-
+  // ── 1. PostgreSQL via DATABASE_URL (Neon free tier recommended) ───────────
+  if (process.env.DATABASE_URL) {
     try {
-      dbInstance = await driverObj.open({
-        filename: dbPath,
-        driver: driverObj.sqlite3.Database
+      const pgMod = await import('pg');
+      const { Pool } = pgMod.default || pgMod;
+      const pool = new Pool({
+        connectionString: process.env.DATABASE_URL,
+        ssl: { rejectUnauthorized: false },
+        max: 10,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 5000,
       });
+      // Verify connection
+      await pool.query('SELECT 1');
+      console.log('✅ Connected to PostgreSQL (Neon) — data is permanently persisted');
+      dbInstance = new PgWrapper(pool);
       await initDb(dbInstance);
       return dbInstance;
     } catch (err) {
-      console.warn('File SQLite failed, trying in-memory:', err);
+      console.error('❌ PostgreSQL connection failed:', err.message);
+      throw new Error(`Database connection failed: ${err.message}. Check your DATABASE_URL environment variable.`);
+    }
+  }
+
+  // ── 2. Local SQLite (development only) ────────────────────────────────────
+  if (process.env.NODE_ENV !== 'production') {
+    const driverObj = await loadSqliteDriver();
+    if (driverObj && driverObj.open && driverObj.sqlite3) {
+      const dbPath = path.join(__dirname, 'crm.sqlite');
       try {
         dbInstance = await driverObj.open({
-          filename: ':memory:',
+          filename: dbPath,
           driver: driverObj.sqlite3.Database
         });
+        console.log('✅ Using local SQLite:', dbPath);
         await initDb(dbInstance);
         return dbInstance;
-      } catch (memErr) {
-        console.warn('In-memory sqlite failed:', memErr);
+      } catch (err) {
+        console.warn('File SQLite failed, trying in-memory:', err.message);
+        try {
+          dbInstance = await driverObj.open({
+            filename: ':memory:',
+            driver: driverObj.sqlite3.Database
+          });
+          console.log('⚠️  Using in-memory SQLite (data not persisted)');
+          await initDb(dbInstance);
+          return dbInstance;
+        } catch (memErr) {
+          console.warn('In-memory sqlite failed:', memErr.message);
+        }
       }
     }
   }
 
-  // Fallback: Pure JS in-memory fallback
-  console.log('Using in-memory JS fallback store');
+  // ── 3. Production with no DATABASE_URL — fail loudly ─────────────────────
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'DATABASE_URL is not set. In production, you must provide a PostgreSQL connection string. ' +
+      'Create a free database at https://neon.tech and set DATABASE_URL in your Render environment variables.'
+    );
+  }
+
+  // ── 4. Last resort: JS in-memory fallback ────────────────────────────────
+  console.log('⚠️  Using in-memory JS fallback store — data will NOT persist');
   dbInstance = createMemoryFallbackDb();
   return dbInstance;
 }
 
 
-// ─── 4. JS In-Memory Fallback ─────────────────────────────────────────────────
+// ─── JS In-Memory Fallback ────────────────────────────────────────────────────
 function createMemoryFallbackDb() {
   const TMP_STORE_PATH = path.join('/tmp', 'saivyy_store.json');
   let store;
@@ -182,7 +351,7 @@ function createMemoryFallbackDb() {
 
     if (clean.includes('ORDER BY created ASC')) {
       rows.sort((a, b) => String(a.created || '').localeCompare(String(b.created || '')));
-    } else if (clean.includes('ORDER BY rowid DESC')) {
+    } else if (clean.includes('ORDER BY rowid DESC') || clean.includes('ORDER BY id DESC')) {
       rows = [...rows].reverse();
     }
 
@@ -285,7 +454,7 @@ function createMemoryFallbackDb() {
   };
 }
 
-// ─── 5. Database Schema & Seed ────────────────────────────────────────────────
+// ─── Database Schema & Seed ───────────────────────────────────────────────────
 async function initDb(db) {
   await db.exec(`
     CREATE TABLE IF NOT EXISTS users (
@@ -509,13 +678,14 @@ async function initDb(db) {
     );
   `);
 
-  // Migrate users table (local SQLite only)
+  // ── Column migrations (add if missing) ────────────────────────────────────
   try {
     const userCols = await db.all('PRAGMA table_info(users)');
-    if (!userCols.some(c => c.name === 'orgId')) {
+    const userColNames = userCols.map(c => (c.name || '').toLowerCase());
+    if (!userColNames.some(n => n === 'orgid' || n === 'orgId')) {
       await db.run('ALTER TABLE users ADD COLUMN orgId TEXT');
     }
-    if (!userCols.some(c => c.name === 'role')) {
+    if (!userColNames.some(n => n === 'role')) {
       await db.run("ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'Member'");
     }
   } catch(e) {}
@@ -524,29 +694,31 @@ async function initDb(db) {
     await db.run(`UPDATE users SET orgId = ? WHERE (orgId IS NULL OR orgId = '')`, [DEFAULT_ORG_ID]);
   } catch(e) {}
 
-  // Column migrations for local SQLite (PRAGMA-based)
-  const tables = ['leads', 'deals', 'customers', 'companies', 'teams', 'team_members', 'tasks', 'calls', 'meetings', 'activities', 'automations', 'campaigns', 'notifications', 'integrations'];
-  for (const table of tables) {
+  // Add userId to all tables if missing
+  const allTables = ['leads', 'deals', 'customers', 'companies', 'teams', 'team_members', 'tasks', 'calls', 'meetings', 'activities', 'automations', 'campaigns', 'notifications', 'integrations'];
+  for (const table of allTables) {
     try {
       const colInfo = await db.all(`PRAGMA table_info(${table})`);
-      if (colInfo && !colInfo.some(c => c.name === 'userId')) {
+      const colNames = (colInfo || []).map(c => (c.name || '').toLowerCase());
+      if (colInfo && !colNames.some(n => n === 'userid')) {
         await db.run(`ALTER TABLE ${table} ADD COLUMN userId TEXT`);
       }
     } catch (e) {}
   }
+
   try {
     const leadCols = await db.all('PRAGMA table_info(leads)');
-    const colNames = (leadCols || []).map(c => c.name);
-    if (!colNames.includes('businessDescription')) await db.run('ALTER TABLE leads ADD COLUMN businessDescription TEXT');
-    if (!colNames.includes('companySize')) await db.run('ALTER TABLE leads ADD COLUMN companySize TEXT');
-    if (!colNames.includes('annualRevenue')) await db.run('ALTER TABLE leads ADD COLUMN annualRevenue TEXT');
-    if (!colNames.includes('businessModel')) await db.run('ALTER TABLE leads ADD COLUMN businessModel TEXT');
-    if (!colNames.includes('ownerInitials')) await db.run('ALTER TABLE leads ADD COLUMN ownerInitials TEXT');
+    const colNames = (leadCols || []).map(c => (c.name || '').toLowerCase());
+    if (!colNames.includes('businessdescription') && !colNames.includes('businessDescription')) await db.run('ALTER TABLE leads ADD COLUMN businessDescription TEXT');
+    if (!colNames.includes('companysize') && !colNames.includes('companySize')) await db.run('ALTER TABLE leads ADD COLUMN companySize TEXT');
+    if (!colNames.includes('annualrevenue') && !colNames.includes('annualRevenue')) await db.run('ALTER TABLE leads ADD COLUMN annualRevenue TEXT');
+    if (!colNames.includes('businessmodel') && !colNames.includes('businessModel')) await db.run('ALTER TABLE leads ADD COLUMN businessModel TEXT');
+    if (!colNames.includes('ownerinitials') && !colNames.includes('ownerInitials')) await db.run('ALTER TABLE leads ADD COLUMN ownerInitials TEXT');
   } catch (e) {}
 
-  // ── Seed all tables from INITIAL_STORE (each table seeded only when empty) ──
+  // ── Seed tables from INITIAL_STORE (only when empty) ─────────────────────
 
-  // Seed users
+  // Users
   const userCount = await db.get("SELECT COUNT(*) as count FROM users");
   if (userCount && userCount.count === 0) {
     for (const u of (INITIAL_STORE.users || [])) {
@@ -559,7 +731,7 @@ async function initDb(db) {
     }
   }
 
-  // Seed integrations
+  // Integrations
   const intCount = await db.get("SELECT COUNT(*) as count FROM integrations");
   if (intCount && intCount.count === 0) {
     for (const item of (INITIAL_STORE.integrations || [])) {
@@ -572,7 +744,7 @@ async function initDb(db) {
     }
   }
 
-  // Seed teams
+  // Teams
   const teamCount = await db.get("SELECT COUNT(*) as count FROM teams");
   if (teamCount && teamCount.count === 0) {
     for (const t of (INITIAL_STORE.teams || [])) {
@@ -585,7 +757,7 @@ async function initDb(db) {
     }
   }
 
-  // Seed team_members
+  // Team members
   const tmCount = await db.get("SELECT COUNT(*) as count FROM team_members");
   if (tmCount && tmCount.count === 0) {
     for (const tm of (INITIAL_STORE.team_members || [])) {
@@ -598,7 +770,7 @@ async function initDb(db) {
     }
   }
 
-  // Seed leads
+  // Leads
   const leadCount = await db.get("SELECT COUNT(*) as count FROM leads");
   if (leadCount && leadCount.count === 0) {
     if (INITIAL_STORE.leads && INITIAL_STORE.leads.length > 0) {
@@ -614,7 +786,7 @@ async function initDb(db) {
     }
   }
 
-  // Seed calls
+  // Calls
   const callCount = await db.get("SELECT COUNT(*) as count FROM calls");
   if (callCount && callCount.count === 0) {
     for (const cl of (INITIAL_STORE.calls || [])) {
@@ -627,7 +799,7 @@ async function initDb(db) {
     }
   }
 
-  // Seed activities
+  // Activities
   const actCount = await db.get("SELECT COUNT(*) as count FROM activities");
   if (actCount && actCount.count === 0) {
     for (const a of (INITIAL_STORE.activities || [])) {
@@ -640,11 +812,13 @@ async function initDb(db) {
     }
   }
 
-  // Fix any rows with NULL or legacy userId placeholders
-  const allCrmTables = ['leads', 'deals', 'customers', 'companies', 'teams', 'team_members', 'tasks', 'calls', 'meetings', 'activities', 'automations', 'campaigns', 'notifications', 'integrations'];
-  for (const table of allCrmTables) {
+  // Fix any rows with NULL or legacy userId
+  const fixTables = ['leads', 'deals', 'customers', 'companies', 'teams', 'team_members', 'tasks', 'calls', 'meetings', 'activities', 'automations', 'campaigns', 'notifications', 'integrations'];
+  for (const table of fixTables) {
     try {
       await db.run(`UPDATE ${table} SET userId = 'U-117bb402-3724-4580-9da9-01311b759889' WHERE userId IS NULL OR userId = 'U-admin'`);
     } catch (e) {}
   }
+
+  console.log('✅ Database initialized and seeded');
 }
