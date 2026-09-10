@@ -1,10 +1,12 @@
 import React, { useState, useMemo } from "react";
 import {
   Search, Plus, ChevronDown, GripVertical, Clock,
-  X, Trash2, Edit3, Check, BarChart3, TrendingUp
+  X, Trash2, Edit3, Check, BarChart3, TrendingUp, CheckCircle2, ExternalLink
 } from "lucide-react";
 import { T } from "../tokens";
 import { useCrm } from "../store/CrmContext";
+import { useAuth } from "../store/AuthContext";
+import { useToast } from "../components/ToastContext";
 import { fmtINR, StatusBadge, PriorityDot } from "../components/shared";
 import Modal, { FormField, Input, Select, Textarea, SubmitBtn } from "../components/Modal";
 
@@ -23,29 +25,30 @@ const STAGES = [
 const PRIORITIES = ["High", "Medium", "Normal", "Low"];
 const PRIORITY_COLOR = { High: T.negative, Medium: T.amber, Normal: T.accent, Low: T.inkFaint };
 
-// ---- Deal Card (Kanban) — original clean style ----
-function DealCard({ d, onDragStart, onEdit, onDelete }) {
+// ---- Deal Card (Kanban) — interactive with click to inspect ----
+function DealCard({ d, onDragStart, onSelect, onEdit, onDelete }) {
   const isOverdue = String(d.next || "").toLowerCase().includes("overdue");
 
   return (
     <div
       draggable
       onDragStart={e => onDragStart(e, d.id)}
-      className="crm-drag-card rounded-lg p-3 flex flex-col gap-2 group"
+      onClick={() => onSelect(d)}
+      className="crm-drag-card rounded-lg p-3 flex flex-col gap-2 group cursor-pointer transition-all hover:shadow-md hover:border-indigo-300"
       style={{ background: T.surface, border: `1px solid ${T.line}` }}
     >
       {/* Header row */}
       <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="text-[12.5px] font-semibold truncate" style={{ color: T.ink }}>{d.deal}</p>
+        <div className="min-w-0 flex-1">
+          <p className="text-[12.5px] font-semibold truncate group-hover:text-indigo-600 transition-colors" style={{ color: T.ink }}>{d.deal}</p>
           <p className="text-[11.5px] truncate" style={{ color: T.inkFaint }}>{d.company}</p>
         </div>
-        <div className="flex items-center gap-0.5 shrink-0">
+        <div className="flex items-center gap-0.5 shrink-0" onClick={e => e.stopPropagation()}>
           <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-            <button onClick={() => onEdit(d)} className="crm-focusable p-1 rounded hover:bg-gray-100" style={{ color: T.accent }} title="Edit">
+            <button onClick={(e) => { e.stopPropagation(); onEdit(d); }} className="crm-focusable p-1 rounded hover:bg-gray-100" style={{ color: T.accent }} title="Edit">
               <Edit3 size={11} />
             </button>
-            <button onClick={() => onDelete(d.id)} className="crm-focusable p-1 rounded hover:bg-gray-100" style={{ color: T.negative }} title="Delete">
+            <button onClick={(e) => { e.stopPropagation(); onDelete(d.id, d.deal); }} className="crm-focusable p-1 rounded hover:bg-gray-100" style={{ color: T.negative }} title="Delete">
               <Trash2 size={11} />
             </button>
           </div>
@@ -159,10 +162,13 @@ function DealModal({ open, onClose, onSubmit, form, setForm, teamList, title }) 
 // ---- Main Pipeline Page ----
 export default function Pipeline() {
   const { state, dispatch } = useCrm();
+  const { user } = useAuth();
+  const toast = useToast();
   const [dragOverStage, setDragOverStage] = useState(null);
   const [query, setQuery] = useState("");
   const [showAdd, setShowAdd] = useState(false);
   const [editDeal, setEditDeal] = useState(null);
+  const [selectedDeal, setSelectedDeal] = useState(null);
   const [stageFilter, setStageFilter] = useState("All");
   const [ownerFilter, setOwnerFilter] = useState("All");
 
@@ -173,6 +179,12 @@ export default function Pipeline() {
 
   const emptyForm = { deal: "", company: "", value: "", stage: "New", priority: "Medium", ownerFull: "", score: "50", probability: "20", close: "", next: "" };
   const [form, setForm] = useState(emptyForm);
+
+  // Keep selectedDeal in sync with state.deals
+  const activeSelected = useMemo(() => {
+    if (!selectedDeal) return null;
+    return (state.deals || []).find(d => d.id === selectedDeal.id) || selectedDeal;
+  }, [selectedDeal, state.deals]);
 
   // ---- Computed filtered deals ----
   const filtered = useMemo(() => {
@@ -219,29 +231,49 @@ export default function Pipeline() {
     e.preventDefault();
     setDragOverStage(null);
     const id = e.dataTransfer.getData("dealId");
-    if (id) dispatch({ type: "MOVE_DEAL", payload: { id, stage: stageKey } });
+    if (id) {
+      const deal = (state.deals || []).find(d => d.id === id);
+      dispatch({ type: "MOVE_DEAL", payload: { id, stage: stageKey } });
+      toast.success(`Moved ${deal ? `"${deal.deal}"` : "deal"} to ${stageKey}`, "Pipeline Updated");
+    }
+  };
+
+  // ---- Update Stage via Drawer ----
+  const handleUpdateStage = (dealId, nextStage) => {
+    dispatch({
+      type: "UPDATE_DEAL",
+      payload: {
+        id: dealId,
+        stage: nextStage,
+        probability: nextStage === "Won" ? 100 : nextStage === "Lost" ? 0 : 60,
+      }
+    });
+    toast.success(`Deal moved to stage: ${nextStage}`, "Stage Updated");
   };
 
   // ---- Add Deal ----
   const submitAdd = () => {
-    if (!form.deal || !form.company) return alert("Deal name and company required");
-    const ownerFull = form.ownerFull || teamList[0] || "Unassigned";
+    if (!form.deal || !form.company) return toast.warning("Deal name and company are required", "Validation");
+    const ownerFull = form.ownerFull || user?.name || teamList[0] || "Unassigned";
     const ownerInitials = ownerFull.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
+    const numValue = parseInt(String(form.value).replace(/[^0-9]/g, "")) || 0;
     dispatch({
       type: "ADD_DEAL",
       payload: {
+        id: `D-${Date.now()}`,
         ...form,
         ownerFull,
         owner: ownerInitials,
-        value: parseInt(String(form.value).replace(/[^0-9]/g, "")) || 0,
+        value: numValue,
         score: parseInt(form.score) || 50,
         probability: parseInt(form.probability) || 20,
         last: "Just now",
-        next: form.next || "Not scheduled",
+        next: form.next || "Discovery call",
       },
     });
     setShowAdd(false);
     setForm(emptyForm);
+    toast.success(`Added deal "${form.deal}" to pipeline (${fmtINR(numValue)})`, "Deal Created");
   };
 
   // ---- Edit Deal ----
@@ -256,7 +288,7 @@ export default function Pipeline() {
   };
 
   const submitEdit = () => {
-    if (!form.deal || !form.company) return alert("Deal name and company required");
+    if (!form.deal || !form.company) return toast.warning("Deal name and company are required", "Validation");
     const ownerFull = form.ownerFull || teamList[0] || "Unassigned";
     const ownerInitials = ownerFull.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
     dispatch({
@@ -273,11 +305,14 @@ export default function Pipeline() {
     });
     setEditDeal(null);
     setForm(emptyForm);
+    toast.success(`Updated deal "${form.deal}"`, "Deal Saved");
   };
 
   // ---- Delete Deal ----
-  const deleteDeal = (id) => {
-    if (window.confirm("Delete this deal?")) dispatch({ type: "DELETE_DEAL", payload: id });
+  const deleteDeal = (id, name) => {
+    dispatch({ type: "DELETE_DEAL", payload: id });
+    if (selectedDeal && selectedDeal.id === id) setSelectedDeal(null);
+    toast.info(`Removed deal "${name || 'Deal'}"`, "Deal Deleted");
   };
 
   const totalDeals = (state.deals || []).length;
@@ -441,6 +476,7 @@ export default function Pipeline() {
                       key={d.id}
                       d={d}
                       onDragStart={onDragStart}
+                      onSelect={setSelectedDeal}
                       onEdit={openEdit}
                       onDelete={deleteDeal}
                     />
@@ -457,6 +493,132 @@ export default function Pipeline() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* DEAL DETAIL SLIDE-OUT DRAWER */}
+      {activeSelected && (
+        <div className="fixed inset-0 z-50 flex justify-end bg-black/40 backdrop-blur-sm animate-fadeIn" onClick={() => setSelectedDeal(null)}>
+          <div
+            className="w-[450px] max-w-[95vw] h-full shadow-2xl flex flex-col gap-5 p-6 overflow-y-auto crm-scroll animate-slideInRight"
+            style={{ background: T.surface }}
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-start justify-between gap-3 border-b pb-4" style={{ borderColor: T.lineSoft }}>
+              <div className="min-w-0">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-600">Deal Opportunity</span>
+                <h2 className="crm-display text-[18px] font-bold text-gray-900 mt-0.5 leading-snug">{activeSelected.deal}</h2>
+                <p className="text-[13px] text-gray-500 font-medium">{activeSelected.company}</p>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => { openEdit(activeSelected); setSelectedDeal(null); }}
+                  className="crm-focusable p-1.5 rounded-lg border hover:bg-gray-100 text-gray-600"
+                  title="Edit Deal"
+                  style={{ borderColor: T.line }}
+                >
+                  <Edit3 size={15} />
+                </button>
+                <button
+                  onClick={() => setSelectedDeal(null)}
+                  className="crm-focusable p-1.5 rounded-lg border hover:bg-gray-100 text-gray-600"
+                  style={{ borderColor: T.line }}
+                >
+                  <X size={15} />
+                </button>
+              </div>
+            </div>
+
+            {/* Stage Pipeline Interactive Stepper */}
+            <div className="p-3.5 rounded-xl flex flex-col gap-2" style={{ background: T.canvas }}>
+              <div className="flex items-center justify-between text-[11.5px] font-bold uppercase tracking-wider text-gray-500">
+                <span>Stage Pipeline</span>
+                <span className="text-indigo-600">{activeSelected.stage}</span>
+              </div>
+              <div className="flex items-center gap-1 overflow-x-auto crm-scroll py-1">
+                {STAGES.map(s => {
+                  const isCurrent = activeSelected.stage === s.key;
+                  return (
+                    <button
+                      key={s.key}
+                      onClick={() => handleUpdateStage(activeSelected.id, s.key)}
+                      className={`text-[11px] font-semibold px-2 py-1 rounded-md whitespace-nowrap transition-all ${
+                        isCurrent
+                          ? "bg-indigo-600 text-white shadow-sm scale-105"
+                          : "bg-white text-gray-600 hover:bg-indigo-50 hover:text-indigo-600 border"
+                      }`}
+                      style={{ borderColor: T.line }}
+                    >
+                      {s.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Quick Financial Snapshot */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="p-4 rounded-xl text-center border" style={{ borderColor: T.line }}>
+                <p className="text-[11px] uppercase font-bold text-gray-400">Deal Value</p>
+                <p className="text-[20px] font-bold crm-mono text-emerald-600 mt-1">{fmtINR(activeSelected.value || 0)}</p>
+              </div>
+              <div className="p-4 rounded-xl text-center border" style={{ borderColor: T.line }}>
+                <p className="text-[11px] uppercase font-bold text-gray-400">Win Probability</p>
+                <p className="text-[20px] font-bold crm-mono text-indigo-600 mt-1">{activeSelected.probability ?? 20}%</p>
+              </div>
+            </div>
+
+            {/* Deal Parameters */}
+            <div className="p-4 rounded-xl flex flex-col gap-3 border" style={{ borderColor: T.line }}>
+              <h4 className="font-bold text-[13px] text-gray-900">Key Parameters</h4>
+              <div className="flex flex-col gap-2 text-[13px]">
+                <div className="flex justify-between py-1 border-b" style={{ borderColor: T.lineSoft }}>
+                  <span className="text-gray-500">Priority</span>
+                  <PriorityDot priority={activeSelected.priority} />
+                </div>
+                <div className="flex justify-between py-1 border-b" style={{ borderColor: T.lineSoft }}>
+                  <span className="text-gray-500">Owner</span>
+                  <span className="font-semibold text-gray-800">{activeSelected.ownerFull || activeSelected.owner}</span>
+                </div>
+                <div className="flex justify-between py-1 border-b" style={{ borderColor: T.lineSoft }}>
+                  <span className="text-gray-500">Target Close Date</span>
+                  <span className="crm-mono text-gray-800">{activeSelected.close || "Not scheduled"}</span>
+                </div>
+                <div className="flex justify-between py-1">
+                  <span className="text-gray-500">Next Action</span>
+                  <span className="font-medium text-indigo-600">{activeSelected.next || "Send Follow-up"}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Action Bar */}
+            <div className="flex items-center gap-2 mt-auto pt-4 border-t" style={{ borderColor: T.line }}>
+              {activeSelected.stage !== "Won" && (
+                <button
+                  onClick={() => handleUpdateStage(activeSelected.id, "Won")}
+                  className="flex-1 py-2.5 rounded-xl font-bold text-[13px] text-white flex items-center justify-center gap-1.5 shadow-md bg-emerald-600 hover:bg-emerald-700 transition-all"
+                >
+                  <CheckCircle2 size={15} /> Mark Won
+                </button>
+              )}
+              {activeSelected.stage !== "Lost" && (
+                <button
+                  onClick={() => handleUpdateStage(activeSelected.id, "Lost")}
+                  className="py-2.5 px-4 rounded-xl font-bold text-[13px] text-red-600 bg-red-50 hover:bg-red-100 transition-colors"
+                >
+                  Mark Lost
+                </button>
+              )}
+              <button
+                onClick={() => deleteDeal(activeSelected.id, activeSelected.deal)}
+                className="p-2.5 rounded-xl text-gray-400 hover:text-red-600 hover:bg-gray-100 transition-colors"
+                title="Delete deal"
+              >
+                <Trash2 size={16} />
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

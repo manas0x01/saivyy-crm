@@ -3,6 +3,7 @@ import { Plus, UserPlus, Crown, Mail, Phone, ShieldCheck, Key } from "lucide-rea
 import { T } from "../tokens";
 import { useCrm } from "../store/CrmContext";
 import { useAuth } from "../store/AuthContext";
+import { useToast } from "../components/ToastContext";
 import { Avatar, fmtINR } from "../components/shared";
 import Modal, { FormField, Input, Select, Textarea, SubmitBtn } from "../components/Modal";
 
@@ -14,27 +15,39 @@ function createId(prefix) {
 function isOwnedByMember(item, member) {
   if (!item || !member) return false;
 
-  if (member.userId && item.userId && String(item.userId) === String(member.userId)) {
-    return true;
-  }
+  const rawMemberName = member.name || (typeof member === "string" ? member : "");
+  const cleanMember = rawMemberName.replace(/\s*\((Leader|Admin|Member)\)/i, "").trim().toLowerCase();
 
-  const ownerName = item.owner || item.ownerFull;
-  if (ownerName && member.name) {
-    const cleanOwner = ownerName.trim().toLowerCase();
-    const cleanMember = member.name.trim().toLowerCase();
+  const ownerName = (item.owner || item.ownerFull || "").trim();
+  const cleanOwner = ownerName.toLowerCase();
+
+  // 1. Direct match by owner string (primary truth for assignments)
+  if (cleanOwner) {
     if (cleanOwner === cleanMember) return true;
+    if (cleanOwner.includes(cleanMember) || cleanMember.includes(cleanOwner)) return true;
 
+    // First name match if at least 3 characters
     const memberFirstName = cleanMember.split(" ")[0];
     const ownerFirstName = cleanOwner.split(" ")[0];
-    if (memberFirstName && ownerFirstName && memberFirstName.length > 1 && memberFirstName === ownerFirstName) {
+    if (memberFirstName && ownerFirstName && memberFirstName.length >= 3 && memberFirstName === ownerFirstName) {
       return true;
     }
+
+    // Initials match if available
+    if (item.ownerInitials && member.initials) {
+      if (item.ownerInitials.trim().toUpperCase() === member.initials.trim().toUpperCase()) {
+        if (cleanMember[0] === cleanOwner[0]) return true;
+      }
+    }
+
+    // Owner was specified but didn't match this member
+    return false;
   }
 
-  if (item.ownerInitials && member.initials) {
-    if (item.ownerInitials.trim().toUpperCase() === member.initials.trim().toUpperCase()) {
-      return true;
-    }
+  // 2. Fallback to user account ID ONLY if owner is unassigned or empty
+  const targetAccId = member.accountUserId || member.userId;
+  if (targetAccId && item.userId && String(item.userId) === String(targetAccId)) {
+    return true;
   }
 
   return false;
@@ -43,6 +56,7 @@ function isOwnedByMember(item, member) {
 export default function Team() {
   const { state, dispatch } = useCrm();
   const { user, createMember } = useAuth();
+  const toast = useToast();
   const teams = state.teams || [];
   const members = state.team || [];
   
@@ -81,18 +95,20 @@ export default function Team() {
 
   const addTeam = () => {
     if (!isLeader) return;
-    if (!teamForm.name.trim()) return alert("Team name is required");
+    if (!teamForm.name.trim()) return toast.warning("Team name is required");
     dispatch({ type: "ADD_TEAM", payload: { id: createId("TEAM"), name: teamForm.name.trim(), description: teamForm.description.trim(), created: new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) } });
+    toast.success(`Team "${teamForm.name.trim()}" created successfully`);
     setTeamForm({ name: "", description: "" });
     setShowTeamModal(false);
   };
 
   const addMember = () => {
     if (!isLeader) return;
-    if (!memberForm.teamId) return alert("Please select a team first");
-    if (!memberForm.name.trim()) return alert("Member name is required");
+    if (!memberForm.teamId) return toast.warning("Please select a team first");
+    if (!memberForm.name.trim()) return toast.warning("Member name is required");
     const initials = memberForm.name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
     dispatch({ type: "ADD_TEAM_MEMBER", payload: { id: createId("TM"), teamId: memberForm.teamId, name: memberForm.name.trim(), initials, role: memberForm.role.trim(), email: memberForm.email.trim(), phone: memberForm.phone.trim(), tag: memberForm.tag, leads: 0, calls: 0, meetings: 0, conv: 0, revenue: 0, won: 0, lost: 0, status: memberForm.status, created: new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) } });
+    toast.success(`Member "${memberForm.name.trim()}" added to team`);
     setMemberForm({ teamId: "", name: "", role: "", email: "", phone: "", tag: "Member", status: "Active" });
     setShowMemberModal(false);
   };

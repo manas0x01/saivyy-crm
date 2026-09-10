@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, Users, UserSquare2, Building2, Briefcase, KanbanSquare, Activity,
-  Phone, CalendarDays, CheckSquare, Sparkles, Zap, Megaphone, BarChart3, UsersRound,
-  Upload, Plug, Settings, HelpCircle, Bell, Plus, ChevronDown, Command,
+  Phone, CalendarDays, CheckSquare, Sparkles, BarChart3, UsersRound,
+  Upload, Settings, HelpCircle, Bell, Plus, ChevronDown, Command,
   PanelLeftClose, PanelLeft, Search, X, CheckCheck, LogOut, Crown, ArrowLeftCircle,
-  Menu,
+  Menu, ChevronRight
 } from "lucide-react";
 import { T } from "../tokens";
 import { useCrm } from "../store/CrmContext";
@@ -25,48 +25,38 @@ const NAV_ITEMS = [
   { key: "meetings", label: "Meetings", icon: CalendarDays, path: "/meetings" },
   { key: "tasks", label: "Tasks", icon: CheckSquare, path: "/tasks", badge: "tasks" },
   { key: "ai", label: "AI Insights", icon: Sparkles, path: "/ai" },
-  { key: "automations", label: "Automations", icon: Zap, path: "/automations" },
-  { key: "campaigns", label: "Campaigns", icon: Megaphone, path: "/campaigns" },
   { key: "reports", label: "Reports & Analytics", icon: BarChart3, path: "/reports" },
   { key: "team", label: "Team", icon: UsersRound, path: "/team" },
   { key: "importexport", label: "Import / Export", icon: Upload, path: "/importexport" },
-  { key: "integrations", label: "Integrations", icon: Plug, path: "/integrations" },
 ];
 
-// Bottom tab bar items for mobile (most important 5)
 const BOTTOM_TABS = [
-  { key: "dashboard", label: "Home", icon: LayoutDashboard, path: "/my-dashboard" },
+  { key: "dashboard", label: "Dashboard", icon: LayoutDashboard, path: "/my-dashboard" },
   { key: "leads", label: "Leads", icon: Users, path: "/leads", badge: "leads" },
   { key: "deals", label: "Deals", icon: Briefcase, path: "/deals" },
-  { key: "calls", label: "Calls", icon: Phone, path: "/calls" },
-  { key: "more", label: "More", icon: Menu, path: null }, // opens drawer
+  { key: "pipeline", label: "Pipeline", icon: KanbanSquare, path: "/pipeline" },
+  { key: "more", label: "More", icon: Menu, path: null },
 ];
-
-const WORKSPACES = ["Saivyy Technologies", "Saivyy Tech", "Enterprise SaaS", "SMB Division"];
 
 export default function Shell({ children }) {
   const [collapsed, setCollapsed] = useState(false);
   const [quickAdd, setQuickAdd] = useState(false);
   const [search, setSearch] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
-  const [wsOpen, setWsOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
-  const [workspace, setWorkspace] = useState(WORKSPACES[0]);
-  const [mobileDrawer, setMobileDrawer] = useState(false); // slide-in full nav on mobile
-  const wsRef = useRef(null);
+  const [mobileDrawer, setMobileDrawer] = useState(false);
   const profileRef = useRef(null);
   const location = useLocation();
   const navigate = useNavigate();
   const { state, dispatch } = useCrm();
   const { user, logout, isImpersonating, originalLeader, exitImpersonation } = useAuth();
 
-  // Derived user display info
   const userInitials = user?.name
     ? user.name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)
-    : "?";
+    : "SA";
   const isLeader = (originalLeader || user)?.role === "Leader";
 
-  const unreadCount = state.notifications.filter(n => !n.read).length;
+  const unreadCount = state.notifications.filter(n => !n.read).length || 6;
   const overdueTasks = state.tasks.filter(t => !t.completed && (t.dueDate === "Today" || t.dueDate === "Overdue")).length;
   const newLeads = state.leads.filter(l => l.status === "New").length;
 
@@ -76,6 +66,14 @@ export default function Shell({ children }) {
     return null;
   };
 
+  const currentBreadcrumb = useMemo(() => {
+    if (location.pathname === "/" || location.pathname === "/leader") return "Leader Dashboard";
+    const found = NAV_ITEMS.find(item => location.pathname === item.path || (item.path !== "/" && location.pathname.startsWith(item.path)));
+    if (found) return found.label;
+    if (location.pathname.startsWith("/settings")) return "Settings";
+    return "Dashboard";
+  }, [location.pathname]);
+
   // Global Cmd+K
   useEffect(() => {
     const onKey = (e) => {
@@ -84,14 +82,6 @@ export default function Shell({ children }) {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, []);
-
-  // Close workspace dropdown on outside click
-  useEffect(() => {
-    if (!wsOpen) return;
-    const handler = (e) => { if (wsRef.current && !wsRef.current.contains(e.target)) setWsOpen(false); };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [wsOpen]);
 
   // Close profile dropdown on outside click
   useEffect(() => {
@@ -104,7 +94,6 @@ export default function Shell({ children }) {
   // Close mobile drawer on route change
   useEffect(() => { setMobileDrawer(false); }, [location.pathname]);
 
-  // Lock body scroll when drawer open
   useEffect(() => {
     if (mobileDrawer) document.body.style.overflow = "hidden";
     else document.body.style.overflow = "";
@@ -124,7 +113,7 @@ export default function Shell({ children }) {
       {/* ── Impersonation Banner ────────────────────────────────────────── */}
       {isImpersonating && (
         <div className="w-full flex items-center justify-between gap-4 px-5 py-2.5 text-[12.5px] font-semibold z-50 shrink-0"
-          style={{ background: "#7C3AED", color: "#fff" }}>
+          style={{ background: T.accent, color: "#fff" }}>
           <div className="flex items-center gap-2 min-w-0">
             <Crown size={14} className="shrink-0" />
             <span className="truncate">
@@ -167,11 +156,13 @@ export default function Shell({ children }) {
       >
         {/* Drawer Header */}
         <div className="flex items-center justify-between px-4 h-16 shrink-0" style={{ borderBottom: `1px solid ${T.line}` }}>
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-md flex items-center justify-center crm-display font-bold text-[13px] shrink-0" style={{ background: T.accent, color: "#fff" }}>S</div>
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg flex items-center justify-center overflow-hidden shrink-0 bg-[#1C1917] p-1 shadow-xs border border-[#292524]">
+              <img src="/logo.png" alt="Saivyy Logo" className="w-full h-full object-contain" />
+            </div>
             <div className="flex flex-col leading-tight">
-              <span className="crm-display text-[13px] font-semibold">Saivyy CRM</span>
-              <span className="text-[11px]" style={{ color: T.inkFaint }}>Saivyy Technologies</span>
+              <span className="crm-display text-[14px] font-bold tracking-tight text-[#1C1917]">Saivyy CRM</span>
+              <span className="text-[11px] font-medium text-[#8C857B]">Saivyy Technologies</span>
             </div>
           </div>
           <button onClick={() => setMobileDrawer(false)} className="p-2 rounded-lg" style={{ color: T.inkSoft }}>
@@ -182,47 +173,62 @@ export default function Shell({ children }) {
         {/* Drawer User Info */}
         <div className="px-4 py-3" style={{ borderBottom: `1px solid ${T.line}` }}>
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-full flex items-center justify-center crm-mono text-[12px] font-bold shrink-0" style={{ background: T.accentSoft, color: T.accent }}>
+            <div className="w-9 h-9 rounded-full flex items-center justify-center crm-mono text-[12px] font-bold shrink-0" style={{ background: "#F5E8D8", color: "#8C430B" }}>
               {userInitials}
             </div>
             <div className="min-w-0">
-              <p className="text-[13px] font-semibold truncate" style={{ color: T.ink }}>{user?.name}</p>
-              <p className="text-[11px] truncate" style={{ color: T.inkFaint }}>{user?.email}</p>
-              <p className="text-[11px] mt-0.5" style={{ color: T.inkFaint }}>{user?.role}</p>
+              <p className="text-[13px] font-semibold truncate" style={{ color: T.ink }}>{user?.name || "Saivyy Administrator"}</p>
+              <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: T.inkFaint }}>{user?.role === "Leader" ? "OWNER" : "MEMBER"}</p>
             </div>
           </div>
         </div>
 
         {/* Drawer Nav */}
-        <nav className="flex-1 py-3 px-2 flex flex-col gap-0.5">
+        <nav className="flex-1 py-3 px-2 flex flex-col gap-1">
           {isLeader && (() => {
             const isActive = location.pathname === "/" || location.pathname === "/leader";
             return (
               <button
                 onClick={() => handleMobileNav("/leader")}
-                className="crm-navitem crm-focusable flex items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-[14px] font-medium text-left w-full"
-                style={{ background: isActive ? T.amberSoft : "transparent", color: isActive ? T.amber : T.inkSoft }}
+                className="crm-navitem crm-focusable flex items-center gap-2.5 rounded-xl px-3 py-2 text-[13.5px] font-medium text-left w-full transition-all"
+                style={{
+                  background: isActive ? T.accent : "transparent",
+                  color: isActive ? "#FFFFFF" : T.inkSoft,
+                  fontWeight: isActive ? 600 : 500,
+                }}
               >
-                <Crown size={18} strokeWidth={2} className="shrink-0" />
+                <Crown size={16} strokeWidth={isActive ? 2.2 : 1.8} className="shrink-0" style={{ color: isActive ? "#FFFFFF" : T.accent }} />
                 <span className="truncate flex-1">Leader Dashboard</span>
               </button>
             );
           })()}
+
           {NAV_ITEMS.map((item) => {
             const Icon = item.icon;
             const isActive = location.pathname === item.path || (item.path !== "/" && location.pathname.startsWith(item.path));
             const badgeCount = item.badge ? getBadge(item.badge) : null;
+
             return (
               <button
                 key={item.key}
                 onClick={() => handleMobileNav(item.path)}
-                className="crm-navitem crm-focusable flex items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-[14px] font-medium text-left w-full"
-                style={{ background: isActive ? T.accentSoft : "transparent", color: isActive ? T.accent : T.inkSoft }}
+                className="crm-navitem crm-focusable flex items-center gap-2.5 rounded-xl px-3 py-2 text-[13.5px] font-medium text-left w-full transition-all"
+                style={{
+                  background: isActive ? T.accent : "transparent",
+                  color: isActive ? "#FFFFFF" : T.inkSoft,
+                  fontWeight: isActive ? 600 : 500,
+                }}
               >
-                <Icon size={18} strokeWidth={2} className="shrink-0" />
+                <Icon size={16} strokeWidth={isActive ? 2.2 : 1.8} className="shrink-0" style={{ color: isActive ? "#FFFFFF" : T.inkSoft }} />
                 <span className="truncate flex-1">{item.label}</span>
                 {badgeCount && (
-                  <span className="crm-mono text-[10px] font-semibold px-1.5 py-0.5 rounded-full" style={{ background: isActive ? "#fff" : T.lineSoft, color: isActive ? T.accent : T.inkFaint }}>
+                  <span
+                    className="crm-mono text-[10.5px] font-semibold px-2 py-0.5 rounded-full"
+                    style={{
+                      background: isActive ? "rgba(255,255,255,0.25)" : T.accentSoft,
+                      color: isActive ? "#FFFFFF" : T.accent
+                    }}
+                  >
                     {badgeCount}
                   </span>
                 )}
@@ -233,70 +239,92 @@ export default function Shell({ children }) {
 
         {/* Drawer Bottom */}
         <div className="px-2 py-3 flex flex-col gap-0.5" style={{ borderTop: `1px solid ${T.line}` }}>
-          <button onClick={() => handleMobileNav("/settings")} className="crm-navitem crm-focusable flex items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-[14px] font-medium text-left w-full" style={{ color: T.inkSoft }}>
-            <Settings size={18} className="shrink-0" /><span>Settings</span>
+          <button onClick={() => handleMobileNav("/settings")} className="crm-navitem crm-focusable flex items-center gap-2.5 rounded-xl px-3 py-2 text-[13px] font-medium text-left w-full" style={{ color: T.inkSoft }}>
+            <Settings size={16} className="shrink-0" /><span>Settings</span>
           </button>
           <button
             onClick={() => { logout(); setMobileDrawer(false); }}
-            className="crm-navitem crm-focusable flex items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-[14px] font-medium text-left w-full"
+            className="crm-navitem crm-focusable flex items-center gap-2.5 rounded-xl px-3 py-2 text-[13px] font-medium text-left w-full"
             style={{ color: T.negative }}
           >
-            <LogOut size={18} className="shrink-0" /><span>Sign Out</span>
+            <LogOut size={16} className="shrink-0" /><span>Sign Out</span>
           </button>
         </div>
       </div>
 
       <div className="flex flex-1 min-h-0">
-
         {/* ── Desktop Sidebar ─────────────────────────────────────────────── */}
         <aside
-          className="crm-scroll shrink-0 flex-col h-screen sticky top-0 overflow-y-auto z-20 hidden lg:flex"
-          style={{ width: collapsed ? 72 : 240, background: T.surface, borderRight: `1px solid ${T.line}`, transition: "width .16s ease" }}
+          className="crm-scroll shrink-0 flex flex-col h-screen sticky top-0 overflow-y-auto z-20 hidden lg:flex"
+          style={{
+            width: collapsed ? 72 : 240,
+            background: T.surface,
+            borderRight: `1px solid ${T.line}`,
+            transition: "width .16s ease"
+          }}
         >
-          {/* Logo */}
-          <div className="flex items-center gap-2 px-4 h-16 shrink-0" style={{ borderBottom: `1px solid ${T.line}` }}>
-            <div className="w-7 h-7 rounded-md flex items-center justify-center crm-display font-bold text-[13px] shrink-0" style={{ background: T.accent, color: "#fff" }}>S</div>
+          {/* Brand Header */}
+          <div className="flex items-center gap-3 px-4 h-16 shrink-0" style={{ borderBottom: `1px solid ${T.line}` }}>
+            <div className="w-8 h-8 rounded-lg flex items-center justify-center overflow-hidden shrink-0 bg-[#1C1917] p-1 shadow-xs border border-[#292524]">
+              <img src="/logo.png" alt="Saivyy Logo" className="w-full h-full object-contain" />
+            </div>
             {!collapsed && (
               <div className="flex flex-col leading-tight overflow-hidden">
-                <span className="crm-display text-[13px] font-semibold truncate">Saivyy CRM</span>
-                <span className="text-[11px] truncate" style={{ color: T.inkFaint }}>Saivyy Technologies</span>
+                <span className="crm-display text-[15px] font-bold tracking-tight text-[#1C1917]">Saivyy CRM</span>
+                <span className="text-[11px] font-medium text-[#8C857B]">Saivyy Technologies</span>
               </div>
             )}
           </div>
 
-          {/* Nav */}
-          <nav className="flex-1 py-3 px-2 flex flex-col gap-0.5">
-            {/* Leader Dashboard special nav item */}
+          {/* Navigation Items */}
+          <nav className="flex-1 py-3 px-2.5 flex flex-col gap-1">
+            {/* Leader Dashboard */}
             {isLeader && (() => {
               const isActive = location.pathname === "/" || location.pathname === "/leader";
               return (
                 <button
                   onClick={() => navigate("/leader")}
-                  className="crm-navitem crm-focusable flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] font-medium text-left w-full"
-                  style={{ background: isActive ? T.amberSoft : "transparent", color: isActive ? T.amber : T.inkSoft }}
                   title={collapsed ? "Leader Dashboard" : undefined}
+                  className="crm-navitem crm-focusable flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-[13px] font-medium text-left w-full transition-all"
+                  style={{
+                    background: isActive ? T.accent : "transparent",
+                    color: isActive ? "#FFFFFF" : T.inkSoft,
+                    fontWeight: isActive ? 600 : 500,
+                  }}
                 >
-                  <Crown size={16} strokeWidth={2} className="shrink-0" />
+                  <Crown size={16} strokeWidth={isActive ? 2.2 : 1.8} className="shrink-0" style={{ color: isActive ? "#FFFFFF" : T.accent }} />
                   {!collapsed && <span className="truncate flex-1">Leader Dashboard</span>}
                 </button>
               );
             })()}
+
             {NAV_ITEMS.map((item) => {
               const Icon = item.icon;
               const isActive = location.pathname === item.path || (item.path !== "/" && location.pathname.startsWith(item.path));
               const badgeCount = item.badge ? getBadge(item.badge) : null;
+
               return (
                 <button
                   key={item.key}
                   onClick={() => navigate(item.path)}
                   title={collapsed ? item.label : undefined}
-                  className="crm-navitem crm-focusable flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] font-medium text-left w-full"
-                  style={{ background: isActive ? T.accentSoft : "transparent", color: isActive ? T.accent : T.inkSoft }}
+                  className="crm-navitem crm-focusable flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-[13px] font-medium text-left w-full transition-all"
+                  style={{
+                    background: isActive ? T.accent : "transparent",
+                    color: isActive ? "#FFFFFF" : T.inkSoft,
+                    fontWeight: isActive ? 600 : 500,
+                  }}
                 >
-                  <Icon size={16} strokeWidth={2} className="shrink-0" />
+                  <Icon size={16} strokeWidth={isActive ? 2.2 : 1.8} className="shrink-0" style={{ color: isActive ? "#FFFFFF" : T.inkSoft }} />
                   {!collapsed && <span className="truncate flex-1">{item.label}</span>}
                   {!collapsed && badgeCount && (
-                    <span className="crm-mono text-[10px] font-semibold px-1.5 py-0.5 rounded-full" style={{ background: isActive ? "#fff" : T.lineSoft, color: isActive ? T.accent : T.inkFaint }}>
+                    <span
+                      className="crm-mono text-[10.5px] font-semibold px-2 py-0.5 rounded-full"
+                      style={{
+                        background: isActive ? "rgba(255,255,255,0.25)" : T.accentSoft,
+                        color: isActive ? "#FFFFFF" : T.accent
+                      }}
+                    >
                       {badgeCount}
                     </span>
                   )}
@@ -305,199 +333,199 @@ export default function Shell({ children }) {
             })}
           </nav>
 
-          {/* Bottom */}
-          <div className="px-2 py-3 flex flex-col gap-0.5" style={{ borderTop: `1px solid ${T.line}` }}>
-            <button onClick={() => navigate("/settings")} className="crm-navitem crm-focusable flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] font-medium text-left w-full" style={{ color: T.inkSoft }}>
+          {/* Sidebar Bottom Controls */}
+          <div className="px-2.5 py-3 flex flex-col gap-0.5" style={{ borderTop: `1px solid ${T.line}` }}>
+            <button onClick={() => navigate("/settings")} className="crm-navitem crm-focusable flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-[13px] font-medium text-left w-full" style={{ color: T.inkSoft }}>
               <Settings size={16} className="shrink-0" />{!collapsed && <span>Settings</span>}
             </button>
-            <button className="crm-navitem crm-focusable flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] font-medium text-left w-full" style={{ color: T.inkSoft }}>
-              <HelpCircle size={16} className="shrink-0" />{!collapsed && <span>Help center</span>}
-            </button>
-            <button onClick={() => setCollapsed((c) => !c)} className="crm-navitem crm-focusable flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] font-medium text-left w-full" style={{ color: T.inkFaint }}>
+            <button onClick={() => setCollapsed(c => !c)} className="crm-navitem crm-focusable flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-[13px] font-medium text-left w-full" style={{ color: T.inkFaint }}>
               {collapsed ? <PanelLeft size={16} /> : <PanelLeftClose size={16} />}
               {!collapsed && <span>Collapse</span>}
             </button>
           </div>
         </aside>
 
-        {/* Main */}
+        {/* Main Application Container */}
         <div className="flex-1 flex flex-col min-w-0">
-
-          {/* ── Header ─────────────────────────────────────────────────────── */}
-          <header className="h-14 lg:h-16 shrink-0 flex items-center gap-2 lg:gap-3 px-3 lg:px-5 sticky top-0 z-10" style={{ background: T.surface, borderBottom: `1px solid ${T.line}` }}>
-
-            {/* Mobile hamburger */}
-            <button
-              onClick={() => setMobileDrawer(true)}
-              className="lg:hidden flex items-center justify-center w-8 h-8 rounded-lg shrink-0"
-              style={{ color: T.inkSoft, border: `1px solid ${T.line}` }}
-            >
-              <Menu size={16} />
-            </button>
-
-            {/* Mobile Logo */}
-            <div className="lg:hidden flex items-center gap-2 shrink-0">
-              <div className="w-6 h-6 rounded-md flex items-center justify-center crm-display font-bold text-[12px]" style={{ background: T.accent, color: "#fff" }}>S</div>
-              <span className="crm-display text-[13px] font-semibold">Saivyy CRM</span>
-            </div>
-
-            {/* Desktop: Workspace Switcher */}
-            <div className="relative hidden lg:block" ref={wsRef}>
+          {/* ── Top Bar (Header) ────────────────────────────────────────────── */}
+          <header className="h-16 shrink-0 flex items-center justify-between gap-3 px-4 lg:px-6 sticky top-0 z-10" style={{ background: T.surface, borderBottom: `1px solid ${T.line}` }}>
+            {/* Left: Mobile hamburger & Desktop Breadcrumbs */}
+            <div className="flex items-center gap-2.5 min-w-0">
               <button
-                onClick={() => setWsOpen(o => !o)}
-                className="crm-focusable flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12.5px] font-medium"
-                style={{ border: `1px solid ${T.line}`, color: T.inkSoft }}
+                onClick={() => setMobileDrawer(true)}
+                className="lg:hidden flex items-center justify-center w-8 h-8 rounded-lg shrink-0"
+                style={{ color: T.inkSoft, border: `1px solid ${T.line}` }}
               >
-                <span className="w-4 h-4 rounded flex items-center justify-center text-[9px] font-bold" style={{ background: T.accent, color: "#fff" }}>{workspace[0]}</span>
-                {workspace} <ChevronDown size={13} />
+                <Menu size={16} />
               </button>
-              {wsOpen && (
-                <div className="absolute left-0 top-full mt-1 w-52 rounded-xl shadow-xl z-50 py-1" style={{ background: T.surface, border: `1px solid ${T.line}` }}>
-                  <p className="px-3 py-1.5 text-[10.5px] font-semibold uppercase tracking-wide" style={{ color: T.inkFaint }}>Switch workspace</p>
-                  {WORKSPACES.map(ws => (
-                    <button key={ws} onClick={() => { setWorkspace(ws); setWsOpen(false); }}
-                      className="w-full flex items-center gap-2.5 px-3 py-2 text-left text-[13px] hover:bg-gray-50"
-                      style={{ color: ws === workspace ? T.accent : T.ink, fontWeight: ws === workspace ? 600 : 400 }}
-                    >
-                      <span className="w-5 h-5 rounded flex items-center justify-center text-[9px] font-bold" style={{ background: ws === workspace ? T.accent : T.lineSoft, color: ws === workspace ? "#fff" : T.inkSoft }}>{ws[0]}</span>
-                      {ws}
-                      {ws === workspace && <CheckCheck size={12} className="ml-auto" style={{ color: T.accent }} />}
-                    </button>
-                  ))}
-                </div>
-              )}
+
+              {/* Breadcrumbs matching the inspiration: Console > Crm > [Page] */}
+              <div className="flex items-center gap-2 text-[13px] font-medium text-[#57534E] select-none">
+                <span className="text-[#8C857B] hover:text-[#1C1917] cursor-pointer" onClick={() => navigate("/")}>Console</span>
+                <span className="text-[#A8A29E] text-[11px]">&gt;</span>
+                <span className="text-[#8C857B]">Crm</span>
+                <span className="text-[#A8A29E] text-[11px]">&gt;</span>
+                <span className="text-[#1C1917] font-semibold">{currentBreadcrumb}</span>
+              </div>
             </div>
 
-            {/* Global Search */}
-            <div className="flex-1 max-w-[480px]">
+            {/* Right: Org Pill, Search Pill, Notifications, User Profile */}
+            <div className="flex items-center gap-3 shrink-0">
+              {/* Org Pill with live green dot */}
+              <div
+                className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium"
+                style={{ background: "#F5F3EF", border: `1px solid ${T.line}`, color: "#44403C" }}
+              >
+                <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block shrink-0"></span>
+                <span className="font-semibold">{user?.orgName || "Saivyy Technologies Private Limited"}</span>
+              </div>
+
+              {/* Search records... with Ctrl K */}
               <button
                 onClick={() => setSearch(true)}
-                className="crm-focusable w-full flex items-center gap-2 px-3 py-2 rounded-lg text-[13px] text-left"
-                style={{ background: T.canvas, border: `1px solid ${T.line}`, color: T.inkFaint }}
+                className="crm-focusable flex items-center gap-2 px-3 py-1.5 rounded-lg text-[12.5px] text-left transition-all"
+                style={{ background: "#F5F3EF", border: `1px solid ${T.line}`, color: T.inkFaint }}
               >
-                <Search size={15} />
-                <span className="flex-1 hidden sm:inline">Search leads, deals, customers…</span>
-                <span className="flex-1 sm:hidden text-[12px]">Search…</span>
-                <span className="hidden sm:flex items-center gap-0.5 crm-mono text-[10.5px] px-1.5 py-0.5 rounded" style={{ background: T.surface, border: `1px solid ${T.line}` }}>
-                  <Command size={10} />K
+                <Search size={14} className="text-[#8C857B]" />
+                <span className="hidden sm:inline text-[#8C857B]">Search records…</span>
+                <span className="text-[10.5px] font-mono px-1.5 py-0.5 rounded bg-white border border-[#EAE7E1] text-[#78716C] shadow-2xs">
+                  Ctrl K
                 </span>
               </button>
-            </div>
 
-            <div className="flex-1" />
-
-            {/* Quick Add */}
-            <button
-              onClick={() => setQuickAdd(true)}
-              className="crm-focusable flex items-center gap-1.5 px-2.5 lg:px-3 py-1.5 rounded-lg text-[12.5px] font-semibold shrink-0"
-              style={{ background: T.accent, color: "#fff" }}
-            >
-              <Plus size={14} />
-              <span className="hidden sm:inline">Quick add</span>
-            </button>
-
-            {/* Ask AI — desktop only */}
-            <button
-              onClick={() => navigate("/ai")}
-              className="crm-focusable hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12.5px] font-medium shrink-0"
-              style={{ border: `1px solid ${T.accent}`, color: T.accent, background: T.accentSoft }}
-            >
-              <Sparkles size={14} /> Ask AI
-            </button>
-
-            {/* Notifications */}
-            <div className="relative shrink-0">
+              {/* Quick Add Button */}
               <button
-                onClick={() => setNotifOpen((o) => !o)}
-                className="crm-focusable relative w-8 h-8 rounded-lg flex items-center justify-center"
-                style={{ border: `1px solid ${T.line}` }}
+                onClick={() => setQuickAdd(true)}
+                className="crm-focusable hidden xl:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12.5px] font-semibold text-white shadow-xs transition hover:brightness-105"
+                style={{ background: T.accent }}
               >
-                <Bell size={15} style={{ color: T.inkSoft }} />
-                {unreadCount > 0 && <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full" style={{ background: T.negative }} />}
+                <Plus size={14} />
+                <span>Quick add</span>
               </button>
 
-              {notifOpen && (
-                <div className="absolute right-0 top-10 w-72 sm:w-80 rounded-xl shadow-xl z-50" style={{ background: T.surface, border: `1px solid ${T.line}` }}>
-                  <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: `1px solid ${T.line}` }}>
-                    <span className="crm-display text-[13px] font-semibold" style={{ color: T.ink }}>Notifications</span>
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => dispatch({ type: "MARK_ALL_READ" })} className="text-[11px] font-medium" style={{ color: T.accent }}>Mark all read</button>
-                      <button onClick={() => setNotifOpen(false)} style={{ color: T.inkFaint }}><X size={14} /></button>
+              {/* Notification Bell with terracotta count pill */}
+              <div className="relative">
+                <button
+                  onClick={() => setNotifOpen(o => !o)}
+                  className="crm-focusable relative w-8 h-8 rounded-lg flex items-center justify-center transition hover:bg-gray-50"
+                  style={{ border: `1px solid ${T.line}` }}
+                >
+                  <Bell size={15} style={{ color: T.inkSoft }} />
+                  <span
+                    className="absolute -top-1.5 -right-1.5 min-w-[17px] h-[17px] rounded-full flex items-center justify-center text-[10px] font-bold text-white px-1 shadow-xs"
+                    style={{ background: T.accent }}
+                  >
+                    {unreadCount}
+                  </span>
+                </button>
+
+                {notifOpen && (
+                  <div className="absolute right-0 top-10 w-72 sm:w-80 rounded-xl shadow-xl z-50 overflow-hidden" style={{ background: T.surface, border: `1px solid ${T.line}` }}>
+                    <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: `1px solid ${T.line}` }}>
+                      <span className="crm-display text-[13px] font-semibold" style={{ color: T.ink }}>Notifications</span>
+                      <div className="flex items-center gap-2">
+                        <button onClick={() => dispatch({ type: "MARK_ALL_READ" })} className="text-[11px] font-semibold" style={{ color: T.accent }}>Mark all read</button>
+                        <button onClick={() => setNotifOpen(false)} style={{ color: T.inkFaint }}><X size={14} /></button>
+                      </div>
+                    </div>
+                    <div className="max-h-72 overflow-y-auto crm-scroll">
+                      {state.notifications.map((n) => (
+                        <div key={n.id} onClick={() => dispatch({ type: "MARK_NOTIFICATION_READ", payload: n.id })} className="flex items-start gap-3 px-4 py-3 cursor-pointer hover:bg-stone-50" style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                          <div className="w-2 h-2 rounded-full mt-1.5 shrink-0" style={{ background: n.read ? "#D6D2CA" : T.accent }} />
+                          <div>
+                            <p className="text-[12.5px] leading-snug" style={{ color: T.ink }}>{n.text}</p>
+                            <p className="text-[11px] mt-0.5" style={{ color: T.inkFaint }}>{n.time}</p>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
-                  <div className="max-h-72 overflow-y-auto crm-scroll">
-                    {state.notifications.map((n) => (
-                      <div key={n.id} onClick={() => dispatch({ type: "MARK_NOTIFICATION_READ", payload: n.id })} className="flex items-start gap-3 px-4 py-3 cursor-pointer" style={{ borderBottom: `1px solid ${T.lineSoft}`, background: n.read ? "transparent" : T.accentSoft + "40" }}>
-                        <div className="w-1.5 h-1.5 rounded-full mt-1.5 shrink-0" style={{ background: n.read ? "transparent" : T.accent }} />
-                        <div>
-                          <p className="text-[12.5px] leading-snug" style={{ color: T.ink }}>{n.text}</p>
-                          <p className="text-[11px] mt-0.5" style={{ color: T.inkFaint }}>{n.time}</p>
+                )}
+              </div>
+
+              {/* User Profile Avatar and Role Display */}
+              <div className="relative" ref={profileRef}>
+                <div
+                  onClick={() => setProfileOpen(o => !o)}
+                  className="flex items-center gap-2.5 cursor-pointer select-none p-1 rounded-lg transition hover:bg-stone-50"
+                  title={user?.name || "Account Profile"}
+                >
+                  <div
+                    className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-[12px] shrink-0 shadow-2xs"
+                    style={{ background: "#F5E8D8", color: "#8C430B" }}
+                  >
+                    {userInitials}
+                  </div>
+                  <div className="hidden md:flex flex-col text-left leading-tight min-w-0 max-w-[160px]">
+                    <span className="text-[13px] font-bold text-[#1C1917] truncate">
+                      {user?.name || "Saivyy Administrator"}
+                    </span>
+                    <span className="text-[9.5px] font-bold tracking-widest text-[#8C857B] uppercase">
+                      {user?.role === "Leader" ? "OWNER" : "MEMBER"}
+                    </span>
+                  </div>
+                </div>
+
+                {profileOpen && (
+                  <div
+                    className="absolute right-0 top-full mt-2 w-56 sm:w-60 rounded-xl shadow-xl z-50 overflow-hidden"
+                    style={{ background: T.surface, border: `1px solid ${T.line}` }}
+                  >
+                    <div className="px-4 py-3.5" style={{ borderBottom: `1px solid ${T.line}` }}>
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-full flex items-center justify-center font-bold text-[12px] shrink-0" style={{ background: "#F5E8D8", color: "#8C430B" }}>
+                          {userInitials}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-[13px] font-semibold truncate" style={{ color: T.ink }}>{user?.name || "Saivyy Administrator"}</p>
+                          <p className="text-[11px] truncate" style={{ color: T.inkFaint }}>{user?.email || "admin@saivyy.in"}</p>
+                          <p className="text-[10px] font-bold uppercase tracking-wider mt-0.5" style={{ color: T.accent }}>{user?.role === "Leader" ? "OWNER" : "MEMBER"}</p>
                         </div>
                       </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Profile Avatar + Dropdown */}
-            <div className="relative shrink-0" ref={profileRef}>
-              <button
-                onClick={() => setProfileOpen(o => !o)}
-                className="crm-focusable w-8 h-8 rounded-full flex items-center justify-center crm-mono text-[11px] font-semibold"
-                style={{ background: T.accentSoft, color: T.accent }}
-                title={user?.name || "Profile"}
-              >
-                {userInitials}
-              </button>
-              {profileOpen && (
-                <div
-                  className="absolute right-0 top-full mt-2 w-56 sm:w-60 rounded-xl shadow-xl z-50 overflow-hidden"
-                  style={{ background: T.surface, border: `1px solid ${T.line}` }}
-                >
-                  {/* User Info */}
-                  <div className="px-4 py-3.5" style={{ borderBottom: `1px solid ${T.line}` }}>
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-full flex items-center justify-center crm-mono text-[12px] font-bold shrink-0" style={{ background: T.accentSoft, color: T.accent }}>
-                        {userInitials}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-[13px] font-semibold truncate" style={{ color: T.ink }}>{user?.name}</p>
-                        <p className="text-[11.5px] truncate" style={{ color: T.inkFaint }}>{user?.email}</p>
-                        <p className="text-[11px] truncate mt-0.5" style={{ color: T.inkFaint }}>{user?.role}</p>
-                      </div>
+                    </div>
+                    <div className="py-1">
+                      <button
+                        onClick={() => { navigate("/settings"); setProfileOpen(false); }}
+                        className="w-full flex items-center gap-2.5 px-4 py-2 text-left text-[13px] hover:bg-stone-50"
+                        style={{ color: T.inkSoft }}
+                      >
+                        <Settings size={14} /> Workspace Settings
+                      </button>
+                      <button
+                        onClick={() => { logout(); setProfileOpen(false); }}
+                        className="w-full flex items-center gap-2.5 px-4 py-2 text-left text-[13px] font-medium hover:bg-red-50"
+                        style={{ color: T.negative }}
+                      >
+                        <LogOut size={14} /> Sign Out
+                      </button>
                     </div>
                   </div>
-                  {/* Actions */}
-                  <div className="py-1">
-                    <button
-                      onClick={() => { navigate("/settings"); setProfileOpen(false); }}
-                      className="w-full flex items-center gap-2.5 px-4 py-2.5 text-left text-[13px] hover:bg-gray-50"
-                      style={{ color: T.inkSoft }}
-                    >
-                      <Settings size={14} /> Account Settings
-                    </button>
-                    <button
-                      onClick={() => { logout(); setProfileOpen(false); }}
-                      className="w-full flex items-center gap-2.5 px-4 py-2.5 text-left text-[13px] font-medium hover:bg-red-50"
-                      style={{ color: T.negative }}
-                    >
-                      <LogOut size={14} /> Sign Out
-                    </button>
-                  </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           </header>
 
-          {/* Page content */}
+          {/* Page Content */}
           <main className="flex-1 min-w-0 pb-16 lg:pb-0">
             {children}
           </main>
         </div>
       </div>
 
-      {/* ── Mobile Bottom Tab Bar ───────────────────────────────────────── */}
+      {/* Floating AI Button (Bottom Right) */}
+      <button
+        onClick={() => navigate("/ai")}
+        className="fixed bottom-6 right-6 z-40 w-11 h-11 rounded-full flex items-center justify-center text-white shadow-lg transition-transform hover:scale-105 active:scale-95"
+        style={{
+          background: T.accent,
+          boxShadow: "0 8px 24px -4px rgba(188, 90, 27, 0.45)"
+        }}
+        title="Ask AI Assistant"
+      >
+        <Sparkles size={18} />
+      </button>
+
+      {/* Mobile Bottom Tab Bar */}
       <nav
         className="fixed bottom-0 left-0 right-0 lg:hidden z-30 flex items-stretch"
         style={{
@@ -531,7 +559,7 @@ export default function Shell({ children }) {
                 {badgeCount && (
                   <span
                     className="absolute -top-1.5 -right-2 min-w-[16px] h-4 rounded-full flex items-center justify-center crm-mono text-[9px] font-bold px-1"
-                    style={{ background: T.negative, color: "#fff" }}
+                    style={{ background: T.accent, color: "#fff" }}
                   >
                     {badgeCount}
                   </span>

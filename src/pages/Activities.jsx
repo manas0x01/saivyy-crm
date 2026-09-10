@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import { T } from "../tokens";
 import { useCrm } from "../store/CrmContext";
+import { useToast } from "../components/ToastContext";
 import Modal, { FormField, Input, Select, Textarea, SubmitBtn } from "../components/Modal";
 
 const TYPE_ICONS = {
@@ -50,6 +51,7 @@ function timeAgo(dateStr, timeStr) {
 
 export default function Activities() {
   const { state, dispatch } = useCrm();
+  const toast = useToast();
   const [filterType, setFilterType] = useState("All");
   const [query, setQuery] = useState("");
   const [showAdd, setShowAdd] = useState(false);
@@ -139,7 +141,7 @@ export default function Activities() {
   const setF = k => e => setForm(f => ({ ...f, [k]: e.target.value }));
 
   const submit = () => {
-    if (!form.contact || !form.description) return alert("Contact and description required");
+    if (!form.contact.trim() || !form.description.trim()) return toast.warning("Contact and description required");
     const now = new Date();
     dispatch({
       type: "ADD_ACTIVITY",
@@ -150,6 +152,7 @@ export default function Activities() {
         time: now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }),
       }
     });
+    toast.success(`Activity logged for "${form.contact}"`);
     setShowAdd(false);
     setForm(emptyForm);
   };

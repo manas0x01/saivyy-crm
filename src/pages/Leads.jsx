@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useRef, useEffect } from "react";
+import { useLocation } from "react-router-dom";
 import {
   Search, Plus, ChevronDown, ChevronRight, ArrowUpDown,
   ArrowLeft, Mail, Phone, PhoneCall, CalendarPlus, StickyNote, Building, MapPin, Globe,
@@ -9,8 +10,10 @@ import * as XLSX from "xlsx";
 import { T } from "../tokens";
 import { useCrm } from "../store/CrmContext";
 import { useAuth } from "../store/AuthContext";
+import { useToast } from "../components/ToastContext";
 import { Avatar, StatusBadge, PriorityDot, ScoreChip, fmtINR } from "../components/shared";
 import Modal, { FormField, Input, Select, Textarea, SubmitBtn } from "../components/Modal";
+import LeadDetailView from "./LeadDetailView";
 
 const SAVED_VIEWS = ["All leads", "My priority leads", "Follow-ups due today", "Uncontacted", "Closing this month"];
 const TABS = ["Overview", "Business Details", "Activity", "Calls", "Meetings", "Emails", "Tasks", "Notes", "Deals", "AI Insights"];
@@ -26,7 +29,7 @@ const TIMELINE = [
 ];
 
 function exportLeads(leadsToExport, filenamePrefix = "leads", format = "csv") {
-  if (!leadsToExport || leadsToExport.length === 0) return alert("No leads to export.");
+  if (!leadsToExport || leadsToExport.length === 0) return;
   
   const exportData = leadsToExport.map(l => ({
     "ID": l.id,
@@ -68,40 +71,56 @@ function exportLeads(leadsToExport, filenamePrefix = "leads", format = "csv") {
   }
 }
 
-// Helper to check if a lead belongs to a specific employee (by userId, owner name, or initials)
+// Helper to check if a lead belongs to a specific employee (strictly segregated by assignee / owner)
 function isLeadBelongsToEmployee(lead, emp) {
   if (!lead || !emp) return false;
 
-  const empName = emp.name || (typeof emp === "string" ? emp : "");
+  const rawEmpName = emp.name || (typeof emp === "string" ? emp : "");
+  // Clean off role suffix if any (e.g. "MANAS SAXENA (Leader)" -> "manas saxena")
+  const cleanEmpName = rawEmpName.replace(/\s*\((Leader|Admin|Member)\)/i, "").trim().toLowerCase();
 
-  if (emp.isUnassigned || empName === "Unassigned") {
-    return !lead.owner || lead.owner === "Unassigned" || lead.owner === "";
+  const isUnassignedTarget = emp.isUnassigned || rawEmpName === "Unassigned" || cleanEmpName === "unassigned";
+
+  const leadOwner = (lead.owner || "").trim();
+  const isLeadUnassigned = !leadOwner || leadOwner.toLowerCase() === "unassigned" || leadOwner === "—" || leadOwner === "-";
+
+  if (isUnassignedTarget) {
+    return isLeadUnassigned;
   }
 
-  // 1. Match by userId
-  if (emp.userId && lead.userId && String(lead.userId) === String(emp.userId)) {
+  // If lead is unassigned, it does not belong to any specific employee
+  if (isLeadUnassigned) {
+    return false;
+  }
+
+  const lOwner = leadOwner.toLowerCase();
+
+  // 1. Direct Owner Name Matching (Exact match - case insensitive)
+  if (lOwner === cleanEmpName) return true;
+
+  // 2. Full Name Substring Matching (e.g. "Manas Saxena" vs "Manas")
+  if (lOwner.includes(cleanEmpName) || cleanEmpName.includes(lOwner)) {
     return true;
   }
 
-  // 2. Match by owner string (case-insensitive & substring / first-name aware)
-  if (lead.owner && empName) {
-    const lOwner = lead.owner.trim().toLowerCase();
-    const eName = empName.trim().toLowerCase();
+  // 3. First name match if at least 3 characters (e.g. "Vidushi" vs "Vidushi Singh")
+  const eFirst = cleanEmpName.split(" ")[0];
+  const lFirst = lOwner.split(" ")[0];
+  if (eFirst && lFirst && eFirst.length >= 3 && eFirst === lFirst) {
+    return true;
+  }
 
-    if (lOwner === eName) return true;
-    if (lOwner.includes(eName) || eName.includes(lOwner)) return true;
-
-    // First name match (e.g. "lakshita" vs "lakshita arora")
-    const eFirst = eName.split(" ")[0];
-    const lFirst = lOwner.split(" ")[0];
-    if (eFirst && lFirst && eFirst.length > 1 && (eFirst === lFirst || eFirst.includes(lFirst) || lFirst.includes(eFirst))) {
-      return true;
+  // 4. Exact match on initials ONLY if initials match and first character matches
+  if (lead.ownerInitials && emp.initials) {
+    if (lead.ownerInitials.trim().toUpperCase() === emp.initials.trim().toUpperCase()) {
+      if (cleanEmpName[0] === lOwner[0]) return true;
     }
   }
 
-  // 3. Match by ownerInitials
-  if (lead.ownerInitials && emp.initials) {
-    if (lead.ownerInitials.trim().toUpperCase() === emp.initials.trim().toUpperCase()) return true;
+  // 5. Explicit user account match ONLY if lead has no explicit owner
+  const targetAccId = emp.accountUserId || emp.id;
+  if (!leadOwner && targetAccId && lead.userId && String(lead.userId) === String(targetAccId)) {
+    return true;
   }
 
   return false;
@@ -752,9 +771,22 @@ function BusinessDetailsTab({ lead }) {
 export default function Leads() {
   const { state, dispatch } = useCrm();
   const { user } = useAuth();
+  const location = useLocation();
+  const toast = useToast();
   const isLeader = user?.role === "Leader";
 
   const [openLead, setOpenLead] = useState(null);
+
+  // Sync openLead from URL search params (e.g. from GlobalSearch / direct links)
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const leadId = params.get("id");
+    if (leadId && state.leads.length > 0) {
+      const match = state.leads.find(l => l.id === leadId);
+      if (match) setOpenLead(match);
+    }
+  }, [location.search, state.leads]);
+
   const [selected, setSelected] = useState([]);
   const [view, setView] = useState("All leads");
   const [query, setQuery] = useState("");
@@ -856,6 +888,7 @@ export default function Leads() {
         list.push({
           id: m.id,
           userId: m.userId || null,
+          accountUserId: m.accountUserId || m.userId || null,
           name: m.name,
           initials: m.initials || m.name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2),
           email: m.email
@@ -863,11 +896,12 @@ export default function Leads() {
       });
     }
 
-    if (user?.name && !list.some(m => m.name === user.name)) {
+    if (user?.name && !list.some(m => m.name.trim().toLowerCase() === user.name.trim().toLowerCase())) {
       list.unshift({
-        id: "leader-me",
+        id: user.id || "leader-me",
         userId: user.id,
-        name: `${user.name} (Leader)`,
+        accountUserId: user.id,
+        name: user.name,
         initials: user.name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2),
         isLeader: true
       });
@@ -885,12 +919,18 @@ export default function Leads() {
 
   // Dynamic Team Members list from state.team
   const teamList = useMemo(() => {
-    const list = ["Unassigned"];
+    const names = new Set();
+    names.add("Unassigned");
     if (state.team && state.team.length > 0) {
-      list.push(...state.team.map(m => m.name));
+      state.team.forEach(m => {
+        if (m.name && m.name.trim()) names.add(m.name.trim());
+      });
     }
-    return list;
-  }, [state.team]);
+    if (user?.name && user.name.trim()) {
+      names.add(user.name.trim());
+    }
+    return Array.from(names);
+  }, [state.team, user]);
 
   const emptyForm = { name: "", company: "", email: "", phone: "", status: "New", priority: "Medium", source: "Website", owner: "", dealValue: "0", probability: "100", score: "50", industry: "", location: "", businessDescription: "", companySize: "11–50 employees", annualRevenue: "", businessModel: "B2B" };
   const [addForm, setAddForm] = useState(emptyForm);
@@ -898,7 +938,23 @@ export default function Leads() {
   const PER_PAGE = 10;
 
   const activeOwner = addForm.owner || teamList[0] || "Unassigned";
-  const currentLead = openLead ? state.leads.find(l => l.id === openLead.id) || openLead : null;
+  const currentLead = openLead
+    ? typeof openLead === "string"
+      ? state.leads.find((l) => l.id === openLead) || null
+      : state.leads.find((l) => l.id === openLead.id) || openLead
+    : null;
+
+  // Dynamic list of all statuses present in database + standard statuses
+  const availableStatuses = useMemo(() => {
+    const list = [...STATUSES.filter(s => s !== "Custom...")];
+    (state.leads || []).forEach(l => {
+      if (l.status && typeof l.status === "string" && l.status.trim() && !list.includes(l.status.trim())) {
+        list.push(l.status.trim());
+      }
+    });
+    list.push("Custom...");
+    return list;
+  }, [state.leads]);
 
   const filtered = useMemo(() => {
     let rows = state.leads;
@@ -911,7 +967,7 @@ export default function Leads() {
       if (statusFilter === "Custom...") {
         rows = rows.filter(l => !STATUSES.slice(0, -1).includes(l.status));
       } else {
-        rows = rows.filter(l => l.status === statusFilter);
+        rows = rows.filter(l => (l.status || "").trim().toLowerCase() === statusFilter.trim().toLowerCase());
       }
     }
     if (priorityFilter !== "All") rows = rows.filter(l => l.priority === priorityFilter);
@@ -962,8 +1018,14 @@ export default function Leads() {
   };
 
   const handleBulkAssign = (newOwner) => {
-    const ownerInitials = newOwner.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
-    selected.forEach(id => updateLead(id, { owner: newOwner, ownerInitials }));
+    const targetMember = (state.team || []).find(m => m.name === newOwner);
+    const targetUserId = targetMember?.accountUserId || targetMember?.userId || (newOwner === user?.name ? user?.id : null);
+    const ownerInitials = newOwner === "Unassigned" ? "UA" : newOwner.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
+    selected.forEach(id => updateLead(id, { 
+      owner: newOwner, 
+      ownerInitials,
+      ...(targetUserId ? { userId: targetUserId } : {})
+    }));
     setOpenBulkMenu(null);
   };
 
@@ -989,10 +1051,12 @@ export default function Leads() {
   };
 
   const submitAdd = () => {
-    if (!addForm.name || !addForm.company) return alert("Name and company are required");
+    if (!addForm.name || !addForm.company) return toast.warning("Name and company are required", "Validation");
     const ownerToSave = activeOwner;
+    const targetMember = (state.team || []).find(m => m.name === ownerToSave);
+    const targetUserId = targetMember?.accountUserId || targetMember?.userId || (ownerToSave === user?.name ? user?.id : user?.id);
     const initials = addForm.name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
-    const ownerInitials = ownerToSave.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
+    const ownerInitials = ownerToSave === "Unassigned" ? "UA" : ownerToSave.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
     const score = parseInt(addForm.score, 10) || 50;
     const probability = Math.min(100, Math.max(0, parseInt(addForm.probability, 10) || 100));
     const dealValueNum = parseInt(String(addForm.dealValue).replace(/[^0-9]/g, ""), 10) || 0;
@@ -1010,6 +1074,7 @@ export default function Leads() {
         owner: ownerToSave,
         initials,
         ownerInitials,
+        userId: targetUserId,
         score,
         probability,
         dealValueNum,
@@ -1023,12 +1088,13 @@ export default function Leads() {
     });
     setShowAddModal(false);
     setAddForm(emptyForm);
+    toast.success(`Created lead "${addForm.name}" assigned to ${ownerToSave}`, "Lead Added");
   };
 
   // Table columns
   const cols = ["Lead Name", "Phone", "Email", "Company", "Status", "Priority", "Score", "Source", "Assign To", "Last Contact", "Deal Value", "Probability", "Actions"];
 
-  if (currentLead) return <LeadDetail lead={currentLead} onBack={() => setOpenLead(null)} />;
+  if (currentLead) return <LeadDetailView lead={currentLead} onBack={() => setOpenLead(null)} />;
 
   return (
     <div ref={containerRef} className="p-5 flex flex-col gap-4 min-w-0">
@@ -1044,7 +1110,7 @@ export default function Leads() {
             <FormField label="Phone"><Input value={addForm.phone} onChange={setF("phone")} placeholder="+91 98000 00000" /></FormField>
           </div>
           <div className="grid grid-cols-2 gap-4">
-            <FormField label="Status"><Select value={addForm.status} onChange={setF("status")}>{STATUSES.map(s => <option key={s} value={s}>{s}</option>)}</Select></FormField>
+            <FormField label="Status"><Select value={addForm.status} onChange={setF("status")}>{availableStatuses.map(s => <option key={s} value={s}>{s}</option>)}</Select></FormField>
             <FormField label="Priority"><Select value={addForm.priority} onChange={setF("priority")}>{PRIORITIES.map(p => <option key={p} value={p}>{p}</option>)}</Select></FormField>
           </div>
           {(addForm.status === "Custom..." || addForm.status === "Custom") && (
@@ -1288,7 +1354,7 @@ export default function Leads() {
                 {statusFilter === "All" && <Check size={12} style={{ color: T.accent }} />}
               </button>
               <div className="h-px my-1" style={{ background: T.lineSoft }} />
-              {STATUSES.map(s => (
+              {availableStatuses.map(s => (
                 <button
                   key={s}
                   onClick={() => { setStatusFilter(s); setOpenFilterMenu(null); setPage(1); }}
@@ -1493,7 +1559,7 @@ export default function Leads() {
             </button>
             {openBulkMenu === "status" && (
               <div className="absolute left-0 top-full mt-2 w-48 rounded-lg shadow-xl py-1 text-left z-50 overflow-hidden" style={{ background: T.surface, border: `1px solid ${T.line}` }}>
-                {STATUSES.map(s => (
+                {availableStatuses.filter(s => s !== "Custom...").map(s => (
                   <button
                     key={s}
                     onClick={() => handleBulkStatusChange(s)}
@@ -1706,7 +1772,7 @@ export default function Leads() {
                           <td className="px-3 py-2">
                             <InlineSelect
                               value={l.status}
-                              options={STATUSES}
+                              options={availableStatuses}
                               onSave={(val) => updateLead(l.id, { status: val })}
                               renderDisplay={(v) => <StatusBadge status={v} />}
                             />
@@ -1748,8 +1814,14 @@ export default function Leads() {
                                 value={l.owner || "Unassigned"}
                                 options={teamList}
                                 onSave={(val) => {
+                                  const targetMember = (state.team || []).find(m => m.name === val);
+                                  const targetUserId = targetMember?.accountUserId || targetMember?.userId || (val === user?.name ? user?.id : null);
                                   const ownerInitials = val === "Unassigned" ? "UA" : val.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
-                                  updateLead(l.id, { owner: val, ownerInitials });
+                                  updateLead(l.id, { 
+                                    owner: val, 
+                                    ownerInitials,
+                                    ...(targetUserId ? { userId: targetUserId } : {})
+                                  });
                                 }}
                                 renderDisplay={(v) => (
                                   <span className="text-[12.5px] whitespace-nowrap" style={{ color: T.inkSoft }}>{v}</span>
@@ -1800,8 +1872,12 @@ export default function Leads() {
                           {/* Actions */}
                           <td className="px-3 py-2">
                             <button
-                              onClick={() => { if (window.confirm("Delete this lead?")) dispatch({ type: "DELETE_LEAD", payload: l.id }); }}
-                              className="crm-focusable w-7 h-7 rounded-md flex items-center justify-center"
+                              onClick={() => {
+                                dispatch({ type: "DELETE_LEAD", payload: l.id });
+                                toast.success(`Lead "${l.name}" removed`);
+                              }}
+                              title="Delete Lead"
+                              className="crm-focusable w-7 h-7 rounded-md flex items-center justify-center transition-colors hover:bg-rose-50"
                               style={{ color: T.negative }}
                             >
                               <X size={14} />
@@ -1946,7 +2022,7 @@ export default function Leads() {
                   <td className="px-3 py-2">
                     <InlineSelect
                       value={l.status}
-                      options={STATUSES}
+                      options={availableStatuses}
                       onSave={(val) => updateLead(l.id, { status: val })}
                       renderDisplay={(v) => <StatusBadge status={v} />}
                     />
@@ -1988,8 +2064,14 @@ export default function Leads() {
                         value={l.owner || "Unassigned"}
                         options={teamList}
                         onSave={(val) => {
+                          const targetMember = (state.team || []).find(m => m.name === val);
+                          const targetUserId = targetMember?.accountUserId || targetMember?.userId || (val === user?.name ? user?.id : null);
                           const ownerInitials = val === "Unassigned" ? "UA" : val.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
-                          updateLead(l.id, { owner: val, ownerInitials });
+                          updateLead(l.id, { 
+                            owner: val, 
+                            ownerInitials,
+                            ...(targetUserId ? { userId: targetUserId } : {})
+                          });
                         }}
                         renderDisplay={(v) => (
                           <span className="text-[12.5px] whitespace-nowrap" style={{ color: T.inkSoft }}>{v}</span>
@@ -2049,8 +2131,12 @@ export default function Leads() {
                         <StickyNote size={13} />
                       </button>
                       <button
-                        onClick={() => { if (window.confirm("Delete this lead?")) dispatch({ type: "DELETE_LEAD", payload: l.id }); }}
-                        className="crm-focusable w-7 h-7 rounded-md flex items-center justify-center"
+                        onClick={() => {
+                          dispatch({ type: "DELETE_LEAD", payload: l.id });
+                          toast.success(`Lead "${l.name}" removed`);
+                        }}
+                        title="Delete Lead"
+                        className="crm-focusable w-7 h-7 rounded-md flex items-center justify-center transition-colors hover:bg-rose-50"
                         style={{ color: T.negative }}
                       >
                         <X size={14} />

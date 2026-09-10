@@ -78,31 +78,28 @@ export default function AdminRegister() {
   return (
     <div
       className="min-h-screen w-full flex items-center justify-center p-6 relative overflow-hidden select-none"
-      style={{ background: `radial-gradient(circle at 10% 20%, #1a0a2e 0%, #0d1117 90%)` }}
+      style={{ background: `radial-gradient(circle at 50% 10%, #24201D 0%, #1C1917 80%, #12100E 100%)` }}
     >
       {/* Decorative orbs */}
       <div
-        className="absolute w-[400px] h-[400px] rounded-full filter blur-[120px] opacity-20 animate-pulse pointer-events-none"
-        style={{ background: "#7c3aed", top: "-100px", left: "-100px", animationDuration: "8s" }}
+        className="absolute w-[450px] h-[450px] rounded-full filter blur-[120px] opacity-20 animate-pulse pointer-events-none"
+        style={{ background: "#BC5A1B", top: "-100px", left: "-100px", animationDuration: "8s" }}
       />
       <div
         className="absolute w-[350px] h-[350px] rounded-full filter blur-[100px] opacity-15 animate-pulse pointer-events-none"
-        style={{ background: "#3730E0", bottom: "-80px", right: "-80px", animationDuration: "12s" }}
+        style={{ background: "#D97706", bottom: "-80px", right: "-80px", animationDuration: "12s" }}
       />
 
       <div className="w-full max-w-[460px] z-10 flex flex-col gap-6">
-        {/* Branding */}
+        {/* Branding with Official Logo */}
         <div className="flex flex-col items-center text-center gap-2">
-          <div
-            className="w-14 h-14 rounded-2xl flex items-center justify-center shadow-lg shadow-purple-900/50"
-            style={{ background: "linear-gradient(135deg, #7c3aed, #3730E0)" }}
-          >
-            <ShieldCheck size={26} className="text-white" />
+          <div className="w-14 h-14 rounded-2xl flex items-center justify-center shadow-md p-2 bg-[#1C1917] border border-[#3E3835] transform hover:scale-105 transition-transform duration-300">
+            <img src="/logo.png" alt="Saivyy Logo" className="w-full h-full object-contain" />
           </div>
-          <h1 className="crm-display text-[24px] font-bold tracking-tight mt-2" style={{ color: "#f0f0ff" }}>
+          <h1 className="crm-display text-[24px] font-bold tracking-tight mt-2" style={{ color: "#F5F3EF" }}>
             Admin Portal
           </h1>
-          <p className="text-[13px]" style={{ color: "#9ca3af" }}>
+          <p className="text-[13px]" style={{ color: "#A8A29E" }}>
             Saivyy Technologies — Restricted Access
           </p>
         </div>
@@ -113,7 +110,7 @@ export default function AdminRegister() {
           style={{
             background: "rgba(255, 255, 255, 0.04)",
             border: `1px solid rgba(255, 255, 255, 0.1)`,
-            boxShadow: `0 20px 60px -15px rgba(124, 58, 237, 0.3)`,
+            boxShadow: `0 20px 60px -15px rgba(0, 0, 0, 0.5)`,
           }}
         >
           {/* Tabs */}
@@ -122,9 +119,9 @@ export default function AdminRegister() {
               onClick={() => { setIsLogin(true); setError(""); setSuccess(""); }}
               className="flex-1 py-2 text-[13px] font-semibold rounded-lg transition-all duration-200"
               style={{
-                background: isLogin ? "rgba(124,58,237,0.5)" : "transparent",
-                color: isLogin ? "#f0f0ff" : "#9ca3af",
-                boxShadow: isLogin ? "0 2px 8px -2px rgba(124,58,237,0.4)" : "none",
+                background: isLogin ? "#BC5A1B" : "transparent",
+                color: isLogin ? "#FFFFFF" : "#A8A29E",
+                boxShadow: isLogin ? "0 2px 8px -2px rgba(188,90,27,0.4)" : "none",
               }}
             >
               Sign In
@@ -133,9 +130,9 @@ export default function AdminRegister() {
               onClick={() => { setIsLogin(false); setError(""); setSuccess(""); }}
               className="flex-1 py-2 text-[13px] font-semibold rounded-lg transition-all duration-200"
               style={{
-                background: !isLogin ? "rgba(124,58,237,0.5)" : "transparent",
-                color: !isLogin ? "#f0f0ff" : "#9ca3af",
-                boxShadow: !isLogin ? "0 2px 8px -2px rgba(124,58,237,0.4)" : "none",
+                background: !isLogin ? "#BC5A1B" : "transparent",
+                color: !isLogin ? "#FFFFFF" : "#A8A29E",
+                boxShadow: !isLogin ? "0 2px 8px -2px rgba(188,90,27,0.4)" : "none",
               }}
             >
               Register
@@ -267,8 +264,8 @@ export default function AdminRegister() {
               disabled={loading}
               className="flex items-center justify-center gap-2 py-3 rounded-xl font-semibold text-[13.5px] tracking-wide mt-1 text-white transition-all duration-150 hover:opacity-90 active:scale-[0.99]"
               style={{
-                background: "linear-gradient(135deg, #7c3aed, #3730E0)",
-                boxShadow: "0 8px 24px -8px rgba(124,58,237,0.5)",
+                background: "linear-gradient(135deg, #BC5A1B, #8C430B)",
+                boxShadow: "0 8px 24px -8px rgba(188,90,27,0.5)",
               }}
             >
               {loading ? (

@@ -269,3 +269,74 @@ export async function resetCrmDatabase() {
     headers: getHeaders()
   });
 }
+
+export async function createBatchLeads(leads) {
+  return safeFetch('/api/leads/batch', {
+    method: 'POST',
+    headers: getHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ leads }),
+  });
+}
+
+export async function convertLead(data) {
+  return safeFetch('/api/leads/convert', {
+    method: 'POST',
+    headers: getHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateCustomer(id, data) {
+  return safeFetch(`/api/customers/${id}`, {
+    method: 'PUT',
+    headers: getHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateCompany(id, data) {
+  return safeFetch(`/api/companies/${id}`, {
+    method: 'PUT',
+    headers: getHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteCompany(id) {
+  return safeFetch(`/api/companies/${id}`, {
+    method: 'DELETE',
+    headers: getHeaders()
+  });
+}
+
+export async function updateMeeting(id, data) {
+  return safeFetch(`/api/meetings/${id}`, {
+    method: 'PUT',
+    headers: getHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteMeeting(id) {
+  return safeFetch(`/api/meetings/${id}`, {
+    method: 'DELETE',
+    headers: getHeaders()
+  });
+}
+
+export async function updateCall(id, data) {
+  return safeFetch(`/api/calls/${id}`, {
+    method: 'PUT',
+    headers: getHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(data),
+  });
+}
+
+export async function saveSettings(data) {
+  return safeFetch('/api/settings', {
+    method: 'POST',
+    headers: getHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(data),
+  });
+}
+

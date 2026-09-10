@@ -30,7 +30,21 @@ export const STATUS_STYLE = {
 };
 
 export function StatusBadge({ status }) {
-  const s = STATUS_STYLE[status] || { bg: T.accentSoft, fg: T.accent };
+  let s = STATUS_STYLE[status];
+  if (!s && status) {
+    const lower = String(status).toLowerCase();
+    if (lower.includes("lost") || lower.includes("invalid") || lower.includes("wrong") || lower.includes("waste") || lower.includes("non-interested") || lower.includes("doesn't exist")) {
+      s = { bg: T.negativeSoft, fg: T.negative };
+    } else if (lower.includes("interested") || lower.includes("meeting") || lower.includes("won") || lower.includes("connected") || lower.includes("qualified")) {
+      s = { bg: T.positiveSoft, fg: T.positive };
+    } else if (lower.includes("call") || lower.includes("pick") || lower.includes("later") || lower.includes("tomorrow") || lower.includes("busy") || lower.includes("whatsapp") || lower.includes("brochure") || lower.includes("thodi")) {
+      s = { bg: T.amberSoft, fg: T.amber };
+    } else {
+      s = { bg: T.accentSoft, fg: T.accent };
+    }
+  } else if (!s) {
+    s = { bg: T.lineSoft, fg: T.inkSoft };
+  }
   return (
     <span className="text-[11.5px] font-medium px-2 py-0.5 rounded-full whitespace-nowrap" style={{ background: s.bg, color: s.fg }}>
       {status || "New"}

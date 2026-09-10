@@ -5,9 +5,11 @@ import {
 import { Download, Trophy } from "lucide-react";
 import { T } from "../tokens";
 import { useCrm } from "../store/CrmContext";
+import { useToast } from "../components/ToastContext";
+import { filterByDateRange } from "../utils/dateFilter";
 import { SectionLabel, ChartTooltip, fmtINR } from "../components/shared";
 
-const RANGES = ["This Week", "This Month", "This Quarter", "This Year"];
+const RANGES = ["This Week", "This Month", "This Quarter", "This Year", "All Time"];
 const TABS = ["Lead analytics", "Sales analytics", "Salesperson analytics"];
 
 function Kpi({ label, value }) {
@@ -29,23 +31,75 @@ export default function Reports() {
   const [tab, setTab] = useState("Lead analytics");
   const [range, setRange] = useState("This Quarter");
   const { state } = useCrm();
+  const toast = useToast();
+
+  // Filtered collections by selected time range
+  const filteredLeads = useMemo(() => filterByDateRange(state.leads || [], range, ['created', 'lastContact']), [state.leads, range]);
+  const filteredDeals = useMemo(() => filterByDateRange(state.deals || [], range, ['close', 'last']), [state.deals, range]);
+  const filteredCalls = useMemo(() => filterByDateRange(state.calls || [], range, ['date']), [state.calls, range]);
+  const filteredMeetings = useMemo(() => filterByDateRange(state.meetings || [], range, ['date']), [state.meetings, range]);
 
   const exportCSV = () => {
-    const rows = [["Name", "Company", "Status", "Value"], ...state.leads.map(l => [l.name, l.company, l.status, l.dealValue])];
+    let filename = `crm_report_${tab.toLowerCase().replace(/\s+/g, "_")}.csv`;
+    let rows = [];
+
+    if (tab === "Lead analytics") {
+      rows = [
+        ["Lead Name", "Company", "Status", "Priority", "Score", "Deal Value", "Owner", "Created"],
+        ...filteredLeads.map(l => [
+          `"${(l.name || "").replace(/"/g, '""')}"`,
+          `"${(l.company || "").replace(/"/g, '""')}"`,
+          l.status || "New",
+          l.priority || "Medium",
+          l.score || 50,
+          `"${l.dealValue || fmtINR(l.dealValueNum || 0)}"`,
+          `"${(l.owner || "").replace(/"/g, '""')}"`,
+          `"${l.created || ""}"`
+        ])
+      ];
+    } else if (tab === "Sales analytics") {
+      rows = [
+        ["Deal Name", "Company", "Stage", "Value (INR)", "Win Probability", "Close Date", "Owner"],
+        ...filteredDeals.map(d => [
+          `"${(d.deal || "").replace(/"/g, '""')}"`,
+          `"${(d.company || "").replace(/"/g, '""')}"`,
+          d.stage || "New",
+          d.value || 0,
+          `${d.probability || 20}%`,
+          d.close || "",
+          `"${(d.ownerFull || d.owner || "").replace(/"/g, '""')}"`
+        ])
+      ];
+    } else {
+      rows = [
+        ["Representative", "Role", "Assigned Leads", "Calls Logged", "Meetings Hosted", "Won Revenue (INR)", "Conversion %"],
+        ...sortedTeam.map(m => [
+          `"${(m.name || "").replace(/"/g, '""')}"`,
+          m.role || "Member",
+          m.leads || 0,
+          m.calls || 0,
+          m.meetings || 0,
+          m.revenue || 0,
+          `${m.conv || 0}%`
+        ])
+      ];
+    }
+
     const content = "data:text/csv;charset=utf-8," + rows.map(e => e.join(",")).join("\n");
     const encoded = encodeURI(content);
     const link = document.createElement("a");
     link.setAttribute("href", encoded);
-    link.setAttribute("download", `crm_report_${tab.toLowerCase().replace(/\s+/g, "_")}.csv`);
+    link.setAttribute("download", filename);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    toast.success(`Exported ${tab} for ${range}`, "CSV Exported");
   };
 
   // Dynamic Lead Sources Distribution
   const sourceDist = useMemo(() => {
     const map = {};
-    state.leads.forEach(l => {
+    filteredLeads.forEach(l => {
       const src = l.source || "Website";
       map[src] = (map[src] || 0) + 1;
     });
@@ -55,14 +109,14 @@ export default function Reports() {
       value,
       color: colors[i % colors.length]
     }));
-  }, [state.leads]);
+  }, [filteredLeads]);
 
   const maxSourceVal = useMemo(() => Math.max(...sourceDist.map(s => s.value), 1), [sourceDist]);
 
   // Dynamic Lead Status Breakup
   const statusDist = useMemo(() => {
     const map = {};
-    state.leads.forEach(l => {
+    filteredLeads.forEach(l => {
       const s = l.status || "New";
       map[s] = (map[s] || 0) + 1;
     });
@@ -72,61 +126,61 @@ export default function Reports() {
       value,
       color: colors[i % colors.length]
     }));
-  }, [state.leads]);
+  }, [filteredLeads]);
 
   const avgResponseTime = useMemo(() => {
-    const touchpoints = (state.activities?.length || 0) + (state.calls?.length || 0);
-    if (!touchpoints || !state.leads.length) return "0.0 hrs";
+    const touchpoints = (state.activities?.length || 0) + (filteredCalls.length || 0);
+    if (!touchpoints || !filteredLeads.length) return "0.0 hrs";
     const avgHours = (Math.max(0.5, 24 / Math.max(1, touchpoints))).toFixed(1);
     return `${avgHours} hrs`;
-  }, [state.activities, state.calls, state.leads]);
+  }, [state.activities, filteredCalls, filteredLeads]);
 
   const avgLeadScore = useMemo(() => {
-    if (!state.leads.length) return "0 / 100";
-    const sum = state.leads.reduce((acc, l) => acc + (l.score || 0), 0);
-    return `${Math.round(sum / state.leads.length)} / 100`;
-  }, [state.leads]);
+    if (!filteredLeads.length) return "0 / 100";
+    const sum = filteredLeads.reduce((acc, l) => acc + (l.score || 0), 0);
+    return `${Math.round(sum / filteredLeads.length)} / 100`;
+  }, [filteredLeads]);
 
   const leadWonConversion = useMemo(() => {
-    if (!state.leads.length) return "0.0%";
-    const wonCount = state.deals.filter(d => d.stage === "Won").length;
-    return `${((wonCount / state.leads.length) * 100).toFixed(1)}%`;
-  }, [state.leads, state.deals]);
+    if (!filteredLeads.length) return "0.0%";
+    const wonCount = filteredDeals.filter(d => d.stage === "Won").length;
+    return `${((wonCount / filteredLeads.length) * 100).toFixed(1)}%`;
+  }, [filteredLeads, filteredDeals]);
 
   const winLoss = useMemo(() => {
-    const won = state.deals.filter(d => d.stage === "Won").length;
-    const lost = state.deals.filter(d => d.stage === "Lost").length;
+    const won = filteredDeals.filter(d => d.stage === "Won").length;
+    const lost = filteredDeals.filter(d => d.stage === "Lost").length;
     return [
       { name: "Won", value: won, color: T.positive },
       { name: "Lost", value: lost, color: T.negative },
     ];
-  }, [state.deals]);
+  }, [filteredDeals]);
 
   const avgDealVal = useMemo(() => {
-    if (!state.deals.length) return "₹0";
-    const sum = state.deals.reduce((acc, d) => acc + (d.value || 0), 0);
-    return fmtINR(Math.round(sum / state.deals.length));
-  }, [state.deals]);
+    if (!filteredDeals.length) return "₹0";
+    const sum = filteredDeals.reduce((acc, d) => acc + (d.value || 0), 0);
+    return fmtINR(Math.round(sum / filteredDeals.length));
+  }, [filteredDeals]);
 
   const totalRev = useMemo(() => {
-    const won = state.deals.filter(d => d.stage === "Won");
+    const won = filteredDeals.filter(d => d.stage === "Won");
     const sum = won.reduce((acc, d) => acc + (d.value || 0), 0);
     return fmtINR(sum);
-  }, [state.deals]);
+  }, [filteredDeals]);
 
   const avgSalesCycle = useMemo(() => {
-    const closed = state.deals.filter(d => d.stage === "Won" || d.stage === "Lost");
+    const closed = filteredDeals.filter(d => d.stage === "Won" || d.stage === "Lost");
     if (!closed.length) return "0.0 days";
     return `${(Math.max(1, closed.length * 3.5)).toFixed(1)} days`;
-  }, [state.deals]);
+  }, [filteredDeals]);
 
   const sortedTeam = useMemo(() => {
     if (!state.team || !state.team.length) return [];
     return state.team.map(m => {
-      const assignedLeads = state.leads.filter(l => l.owner === m.name).length;
-      const callsCount = state.calls.filter(c => c.owner === m.name).length;
-      const meetingsCount = state.meetings.filter(mt => mt.owner === m.name || (mt.attendees && mt.attendees.includes(m.name))).length;
-      const wonDeals = state.deals.filter(d => (d.ownerFull === m.name || d.owner === m.initials) && d.stage === "Won");
+      const assignedLeads = filteredLeads.filter(l => l.owner === m.name).length;
+      const callsCount = filteredCalls.filter(c => c.owner === m.name).length;
+      const meetingsCount = filteredMeetings.filter(mt => mt.owner === m.name || (mt.attendees && mt.attendees.includes(m.name))).length;
+      const wonDeals = filteredDeals.filter(d => (d.ownerFull === m.name || d.owner === m.initials) && d.stage === "Won");
       const wonRevenue = wonDeals.reduce((sum, d) => sum + (d.value || 0), 0);
       const conv = assignedLeads > 0 ? ((wonDeals.length / assignedLeads) * 100).toFixed(1) : (m.conv || 0);
 
@@ -139,7 +193,7 @@ export default function Reports() {
         revenue: wonRevenue || m.revenue || 0
       };
     }).sort((a, b) => b.revenue - a.revenue);
-  }, [state.team, state.leads, state.calls, state.meetings, state.deals]);
+  }, [state.team, filteredLeads, filteredCalls, filteredMeetings, filteredDeals]);
 
   const medalColor = ["#C99A3D", "#9AA1AC", "#B0784A"];
 

@@ -2,18 +2,21 @@ import React, { useState } from "react";
 import { Megaphone, Plus, Mail, Globe, Send } from "lucide-react";
 import { T } from "../tokens";
 import { useCrm } from "../store/CrmContext";
+import { useToast } from "../components/ToastContext";
 import Modal, { FormField, Input, Select, SubmitBtn } from "../components/Modal";
 import { StatusBadge } from "../components/shared";
 
 export default function Campaigns() {
   const { state, dispatch } = useCrm();
+  const toast = useToast();
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState({ name: "", type: "Email", status: "Active" });
 
   const setF = k => e => setForm(f => ({ ...f, [k]: e.target.value }));
   const submit = () => {
-    if (!form.name) return alert("Campaign name required");
-    dispatch({ type: "ADD_CAMPAIGN", payload: { ...form, created: new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) } });
+    if (!form.name.trim()) return toast.warning("Campaign name required");
+    dispatch({ type: "ADD_CAMPAIGN", payload: { ...form, sent: 0, openRate: 0, clickRate: 0, created: new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) } });
+    toast.success(`Campaign "${form.name}" created`);
     setShowAdd(false);
     setForm({ name: "", type: "Email", status: "Active" });
   };

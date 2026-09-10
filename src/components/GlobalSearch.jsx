@@ -36,9 +36,9 @@ export default function GlobalSearch({ open, onClose }) {
   const results = [...leads, ...deals, ...customers];
 
   const goTo = (r) => {
-    if (r.type === "lead") navigate("/leads");
-    else if (r.type === "deal") navigate("/deals");
-    else navigate("/customers");
+    if (r.type === "lead") navigate(`/leads?id=${r.id}`);
+    else if (r.type === "deal") navigate(`/deals?id=${r.id}`);
+    else navigate(`/customers?id=${r.id}`);
     onClose();
   };
 

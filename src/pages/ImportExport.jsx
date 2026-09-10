@@ -6,6 +6,7 @@ import * as XLSX from "xlsx";
 import { T } from "../tokens";
 import { useCrm } from "../store/CrmContext";
 import { useAuth } from "../store/AuthContext";
+import { useToast } from "../components/ToastContext";
 import { FormField, Input } from "../components/Modal";
 
 // Case-insensitive flexible key locator
@@ -71,6 +72,7 @@ function createLeadId() {
 export default function ImportExport() {
   const { state, dispatch } = useCrm();
   const { user, fetchOrgMembers } = useAuth();
+  const toast = useToast();
 
   // Fetch employees / org members with login accounts for assignment
   const [orgMembers, setOrgMembers] = useState([]);
@@ -157,13 +159,13 @@ export default function ImportExport() {
         const sheet = workbook.Sheets[firstSheet];
         const jsonRows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
         if (jsonRows.length === 0) {
-          alert("Selected file is empty or has no readable rows.");
+          toast.warning("Selected file is empty or has no readable rows.");
           return;
         }
         setHeaders(Object.keys(jsonRows[0]));
         setFileData(jsonRows);
       } catch (err) {
-        alert("Error reading Excel/CSV file: " + err.message);
+        toast.error("Error reading Excel/CSV file: " + err.message);
       }
     };
     reader.readAsBinaryString(file);
@@ -245,12 +247,13 @@ export default function ImportExport() {
     };
   };
 
-  // File import confirm
+  // File import confirm using high-speed atomic batch insert
   const confirmImport = async () => {
-    if (!fileData || fileData.length === 0) return alert("No file rows to import");
+    if (!fileData || fileData.length === 0) return toast.warning("No file rows to import", "Import File");
     setImporting(true);
-    let count = 0;
+    let batchPayloads = [];
     let skipped = 0;
+
     for (const row of fileData) {
       const name = findRowValue(row, ["name", "fullname", "leadname", "contact", "person", "firstname", "customer"], 0);
       if (!name) continue;
@@ -260,23 +263,32 @@ export default function ImportExport() {
         skipped++;
         continue;
       }
-      await dispatch({ type: "ADD_LEAD", payload });
-      count++;
+      batchPayloads.push(payload);
     }
+
+    if (batchPayloads.length > 0) {
+      await dispatch({ type: "BATCH_ADD_LEADS", payload: batchPayloads });
+    }
+
     setImporting(false);
-    setImportedCount(count);
+    setImportedCount(batchPayloads.length);
     setFileData(null);
     setFileName("");
-    if (skipped > 0) alert(`Imported ${count} leads. Skipped ${skipped} rows without valid mobile numbers.`);
+
+    toast.success(`Successfully imported ${batchPayloads.length} leads in batch!`, "Import Complete");
+    if (skipped > 0) {
+      toast.info(`Skipped ${skipped} rows without valid mobile phone numbers`, "Row Validation");
+    }
   };
 
-  // Text paste import
+  // Text paste import using batch insert
   const handleTextImport = async () => {
-    if (!csvText.trim()) return alert("Paste CSV or tab-separated text first");
+    if (!csvText.trim()) return toast.warning("Paste CSV or tab-separated text first", "Pasted Text");
     setImporting(true);
     const lines = csvText.trim().split("\n");
-    let count = 0;
+    let batchPayloads = [];
     let skipped = 0;
+
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
       if (!line) continue;
@@ -295,13 +307,21 @@ export default function ImportExport() {
         skipped++;
         continue;
       }
-      await dispatch({ type: "ADD_LEAD", payload });
-      count++;
+      batchPayloads.push(payload);
     }
+
+    if (batchPayloads.length > 0) {
+      await dispatch({ type: "BATCH_ADD_LEADS", payload: batchPayloads });
+    }
+
     setImporting(false);
-    setImportedCount(count);
+    setImportedCount(batchPayloads.length);
     setCsvText("");
-    if (skipped > 0) alert(`Imported ${count} leads. Skipped ${skipped} rows without valid mobile numbers.`);
+
+    toast.success(`Successfully imported ${batchPayloads.length} leads in batch!`, "Import Complete");
+    if (skipped > 0) {
+      toast.info(`Skipped ${skipped} rows without valid mobile phone numbers`, "Row Validation");
+    }
   };
 
   // Download Sample Excel Template
@@ -316,6 +336,7 @@ export default function ImportExport() {
     XLSX.utils.book_append_sheet(wb, ws, "Leads Template");
     if (format === "xlsx") XLSX.writeFile(wb, "crm_leads_sample_template.xlsx");
     else XLSX.writeFile(wb, "crm_leads_sample_template.csv", { bookType: "csv" });
+    toast.info(`Downloaded sample leads template (${format.toUpperCase()})`, "Template Download");
   };
 
   const handleExport = (entity, format = "csv") => {
@@ -327,7 +348,7 @@ export default function ImportExport() {
     else if (entity === "tasks") data = state.tasks;
     else if (entity === "activities") data = state.activities;
 
-    if (!data || data.length === 0) return alert(`No records found in ${entity} to export.`);
+    if (!data || data.length === 0) return toast.warning(`No records found in ${entity} to export.`, "Export");
     if (format === "xlsx") {
       const ws = XLSX.utils.json_to_sheet(data);
       const wb = XLSX.utils.book_new();
@@ -343,6 +364,7 @@ export default function ImportExport() {
       a.download = `saivyy_crm_${entity}.csv`;
       a.click();
     }
+    toast.success(`Exported ${data.length} ${entity} records to ${format.toUpperCase()}`, "Export Ready");
   };
 
   const handleMasterExport = () => {
@@ -354,6 +376,7 @@ export default function ImportExport() {
     if (state.tasks.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(state.tasks), "Tasks");
     if (state.activities.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(state.activities), "Activities");
     XLSX.writeFile(wb, `saivyy_crm_full_database_backup_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    toast.success("Complete CRM SQLite database exported to Excel backup workbook!", "Master Backup");
   };
 
   return (

@@ -31,10 +31,33 @@ function reducer(state, action) {
     // --- LEADS ---
     case "ADD_LEAD":
       return { ...state, leads: [action.payload, ...state.leads] };
+    case "BATCH_ADD_LEADS":
+      return { ...state, leads: [...action.payload, ...state.leads] };
     case "UPDATE_LEAD":
       return { ...state, leads: state.leads.map(l => l.id === action.payload.id ? { ...l, ...action.payload } : l) };
     case "DELETE_LEAD":
       return { ...state, leads: state.leads.filter(l => l.id !== action.payload) };
+    case "CONVERT_LEAD": {
+      const { leadId, deal, customer, company, activity } = action.payload;
+      const leads = state.leads.map(l => l.id === leadId ? { ...l, status: "Won", probability: 100 } : l);
+      const deals = deal ? [deal, ...state.deals] : state.deals;
+      const customers = customer ? [customer, ...state.customers] : state.customers;
+      let companies = [...state.companies];
+      if (company) {
+        const existingIdx = companies.findIndex(c => c.name.toLowerCase() === company.name.toLowerCase());
+        if (existingIdx >= 0) {
+          companies[existingIdx] = {
+            ...companies[existingIdx],
+            deals: (companies[existingIdx].deals || 0) + 1,
+            revenue: company.revenue || companies[existingIdx].revenue,
+          };
+        } else {
+          companies = [company, ...companies];
+        }
+      }
+      const activities = activity ? [activity, ...state.activities] : state.activities;
+      return { ...state, leads, deals, customers, companies, activities };
+    }
 
     // --- DEALS ---
     case "ADD_DEAL":
@@ -48,6 +71,8 @@ function reducer(state, action) {
     // --- CUSTOMERS ---
     case "ADD_CUSTOMER":
       return { ...state, customers: [action.payload, ...state.customers] };
+    case "UPDATE_CUSTOMER":
+      return { ...state, customers: state.customers.map(c => c.id === action.payload.id ? { ...c, ...action.payload } : c) };
     case "DELETE_CUSTOMER":
       return { ...state, customers: state.customers.filter(c => c.id !== action.payload) };
 
@@ -62,10 +87,16 @@ function reducer(state, action) {
     // --- CALLS ---
     case "ADD_CALL":
       return { ...state, calls: [action.payload, ...state.calls] };
+    case "UPDATE_CALL":
+      return { ...state, calls: state.calls.map(c => c.id === action.payload.id ? { ...c, ...action.payload } : c) };
 
     // --- MEETINGS ---
     case "ADD_MEETING":
       return { ...state, meetings: [action.payload, ...state.meetings] };
+    case "UPDATE_MEETING":
+      return { ...state, meetings: state.meetings.map(m => m.id === action.payload.id ? { ...m, ...action.payload } : m) };
+    case "DELETE_MEETING":
+      return { ...state, meetings: state.meetings.filter(m => m.id !== action.payload) };
 
     // --- ACTIVITIES ---
     case "ADD_ACTIVITY":
@@ -76,6 +107,10 @@ function reducer(state, action) {
     // --- COMPANIES ---
     case "ADD_COMPANY":
       return { ...state, companies: [action.payload, ...state.companies] };
+    case "UPDATE_COMPANY":
+      return { ...state, companies: state.companies.map(c => c.id === action.payload.id ? { ...c, ...action.payload } : c) };
+    case "DELETE_COMPANY":
+      return { ...state, companies: state.companies.filter(c => c.id !== action.payload) };
 
     // --- TEAMS ---
     case "ADD_TEAM":
@@ -167,6 +202,12 @@ export function CrmProvider({ children }) {
         case "ADD_LEAD":
           await api.createLead(action.payload);
           break;
+        case "BATCH_ADD_LEADS":
+          await api.createBatchLeads(action.payload);
+          break;
+        case "CONVERT_LEAD":
+          await api.convertLead(action.payload);
+          break;
         case "UPDATE_LEAD":
           await api.updateLead(action.payload.id, action.payload);
           break;
@@ -186,6 +227,9 @@ export function CrmProvider({ children }) {
         case "ADD_CUSTOMER":
           await api.createCustomer(action.payload);
           break;
+        case "UPDATE_CUSTOMER":
+          await api.updateCustomer(action.payload.id, action.payload);
+          break;
         case "DELETE_CUSTOMER":
           await api.deleteCustomer(action.payload);
           break;
@@ -201,8 +245,17 @@ export function CrmProvider({ children }) {
         case "ADD_CALL":
           await api.createCall(action.payload);
           break;
+        case "UPDATE_CALL":
+          await api.updateCall(action.payload.id, action.payload);
+          break;
         case "ADD_MEETING":
           await api.createMeeting(action.payload);
+          break;
+        case "UPDATE_MEETING":
+          await api.updateMeeting(action.payload.id, action.payload);
+          break;
+        case "DELETE_MEETING":
+          await api.deleteMeeting(action.payload);
           break;
         case "ADD_ACTIVITY":
           await api.createActivity(action.payload);
@@ -212,6 +265,12 @@ export function CrmProvider({ children }) {
           break;
         case "ADD_COMPANY":
           await api.createCompany(action.payload);
+          break;
+        case "UPDATE_COMPANY":
+          await api.updateCompany(action.payload.id, action.payload);
+          break;
+        case "DELETE_COMPANY":
+          await api.deleteCompany(action.payload);
           break;
         case "ADD_TEAM":
           await api.createTeam(action.payload);

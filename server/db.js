@@ -1,4 +1,4 @@
-﻿import path from 'path';
+import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { INITIAL_STORE } from './initialStore.js';
@@ -9,82 +9,7 @@ const __dirname = path.dirname(__filename);
 let dbInstance = null;
 const DEFAULT_ORG_ID = 'ORG-saivyy-default';
 
-// ─── 1. TURSO (libSQL) Cloud Adapter ─────────────────────────────────────────
-async function loadTursoDriver() {
-  try {
-    const libsql = await import('@libsql/client');
-    return libsql;
-  } catch (err) {
-    console.warn('libsql client not available:', err?.message || err);
-    return null;
-  }
-}
-
-function rowToPlain(row) {
-  if (!row) return undefined;
-  const obj = {};
-  for (const key of Object.keys(row)) {
-    obj[key] = row[key];
-  }
-  return obj;
-}
-
-function createTursoAdapter(client) {
-  return {
-    _isTurso: true,
-
-    async exec(sql) {
-      const stmts = sql
-        .split(';')
-        .map(s => s.trim())
-        .filter(s => s.length > 0)
-        .map(s => ({ sql: s, args: [] }));
-      if (stmts.length > 0) {
-        try {
-          await client.batch(stmts, 'write');
-        } catch (e) {
-          for (const stmt of stmts) {
-            try { await client.execute(stmt); } catch (_) {}
-          }
-        }
-      }
-      return true;
-    },
-
-    async get(sql, params = []) {
-      try {
-        const result = await client.execute({ sql, args: params });
-        if (!result.rows || result.rows.length === 0) return undefined;
-        return rowToPlain(result.rows[0]);
-      } catch (e) {
-        console.error('Turso get error:', e?.message, sql);
-        return undefined;
-      }
-    },
-
-    async all(sql, params = []) {
-      try {
-        const result = await client.execute({ sql, args: params });
-        return (result.rows || []).map(rowToPlain);
-      } catch (e) {
-        console.error('Turso all error:', e?.message, sql);
-        return [];
-      }
-    },
-
-    async run(sql, params = []) {
-      try {
-        const result = await client.execute({ sql, args: params });
-        return { changes: result.rowsAffected || 1, lastID: Number(result.lastInsertRowid || 0) };
-      } catch (e) {
-        console.error('Turso run error:', e?.message, sql);
-        return { changes: 0 };
-      }
-    }
-  };
-}
-
-// ─── 2. Local SQLite Driver ───────────────────────────────────────────────────
+// ─── Local SQLite Driver ───────────────────────────────────────────────────
 async function loadSqliteDriver() {
   try {
     const sqlite3Mod = await import('sqlite3');
@@ -98,32 +23,11 @@ async function loadSqliteDriver() {
   }
 }
 
-// ─── 3. Main getDb() — priority: Turso > local SQLite > in-memory fallback ──
+// ─── Main getDb() — Local SQLite (crm.sqlite) with JS in-memory fallback ──
 export async function getDb() {
   if (dbInstance) return dbInstance;
 
-  // Priority 1: Turso cloud database (for Vercel production)
-  if (process.env.TURSO_DATABASE_URL) {
-    console.log('Connecting to Turso cloud database...');
-    const tursoMod = await loadTursoDriver();
-    if (tursoMod && tursoMod.createClient) {
-      try {
-        const client = tursoMod.createClient({
-          url: process.env.TURSO_DATABASE_URL,
-          authToken: process.env.TURSO_AUTH_TOKEN || '',
-        });
-        dbInstance = createTursoAdapter(client);
-        await initDb(dbInstance);
-        console.log('Turso cloud database connected and initialized');
-        return dbInstance;
-      } catch (e) {
-        console.error('Turso connection failed, falling back:', e?.message);
-        dbInstance = null;
-      }
-    }
-  }
-
-  // Priority 2: Local SQLite file
+  // Primary: Local SQLite file
   const driverObj = await loadSqliteDriver();
 
   if (driverObj && driverObj.open && driverObj.sqlite3) {
@@ -163,11 +67,12 @@ export async function getDb() {
     }
   }
 
-  // Priority 3: Pure JS in-memory fallback
+  // Fallback: Pure JS in-memory fallback
   console.log('Using in-memory JS fallback store');
   dbInstance = createMemoryFallbackDb();
   return dbInstance;
 }
+
 
 // ─── 4. JS In-Memory Fallback ─────────────────────────────────────────────────
 function createMemoryFallbackDb() {
@@ -333,7 +238,7 @@ function createMemoryFallbackDb() {
           newObj.userId = params[params.length - 1] || DEFAULT_USER_ID;
           newObj.created = new Date().toISOString();
         }
-        if (newObj.id) { store[table].unshift(newObj); saveStore(); }
+        if (newObj.id) { store[table].push(newObj); saveStore(); }
       } else if (clean.toUpperCase().startsWith('UPDATE') && table) {
         const setMatch = clean.match(/UPDATE\s+[a-z0-9_]+\s+SET\s+(.+?)\s+WHERE\s+(.+)/i);
         if (setMatch) {
@@ -417,6 +322,10 @@ async function initDb(db) {
       location TEXT,
       website TEXT,
       notes TEXT,
+      businessDescription TEXT,
+      companySize TEXT,
+      annualRevenue TEXT,
+      businessModel TEXT,
       userId TEXT
     );
     CREATE TABLE IF NOT EXISTS deals (
@@ -615,36 +524,29 @@ async function initDb(db) {
     await db.run(`UPDATE users SET orgId = ? WHERE (orgId IS NULL OR orgId = '')`, [DEFAULT_ORG_ID]);
   } catch(e) {}
 
-  // Column migrations for local SQLite
-  if (!db._isTurso) {
-    const tables = ['leads', 'deals', 'customers', 'companies', 'teams', 'team_members', 'tasks', 'calls', 'meetings', 'activities', 'automations', 'campaigns', 'notifications', 'integrations'];
-    for (const table of tables) {
-      try {
-        const colInfo = await db.all(`PRAGMA table_info(${table})`);
-        if (!colInfo.some(c => c.name === 'userId')) {
-          await db.run(`ALTER TABLE ${table} ADD COLUMN userId TEXT`);
-        }
-      } catch (e) {}
-    }
+  // Column migrations for local SQLite (PRAGMA-based)
+  const tables = ['leads', 'deals', 'customers', 'companies', 'teams', 'team_members', 'tasks', 'calls', 'meetings', 'activities', 'automations', 'campaigns', 'notifications', 'integrations'];
+  for (const table of tables) {
     try {
-      const leadCols = await db.all('PRAGMA table_info(leads)');
-      const colNames = leadCols.map(c => c.name);
-      if (!colNames.includes('businessDescription')) await db.run('ALTER TABLE leads ADD COLUMN businessDescription TEXT');
-      if (!colNames.includes('companySize')) await db.run('ALTER TABLE leads ADD COLUMN companySize TEXT');
-      if (!colNames.includes('annualRevenue')) await db.run('ALTER TABLE leads ADD COLUMN annualRevenue TEXT');
-      if (!colNames.includes('businessModel')) await db.run('ALTER TABLE leads ADD COLUMN businessModel TEXT');
+      const colInfo = await db.all(`PRAGMA table_info(${table})`);
+      if (colInfo && !colInfo.some(c => c.name === 'userId')) {
+        await db.run(`ALTER TABLE ${table} ADD COLUMN userId TEXT`);
+      }
     } catch (e) {}
   }
+  try {
+    const leadCols = await db.all('PRAGMA table_info(leads)');
+    const colNames = (leadCols || []).map(c => c.name);
+    if (!colNames.includes('businessDescription')) await db.run('ALTER TABLE leads ADD COLUMN businessDescription TEXT');
+    if (!colNames.includes('companySize')) await db.run('ALTER TABLE leads ADD COLUMN companySize TEXT');
+    if (!colNames.includes('annualRevenue')) await db.run('ALTER TABLE leads ADD COLUMN annualRevenue TEXT');
+    if (!colNames.includes('businessModel')) await db.run('ALTER TABLE leads ADD COLUMN businessModel TEXT');
+    if (!colNames.includes('ownerInitials')) await db.run('ALTER TABLE leads ADD COLUMN ownerInitials TEXT');
+  } catch (e) {}
 
-  // Set default userId
-  const crmTables = ['leads', 'deals', 'customers', 'companies', 'teams', 'team_members', 'tasks', 'calls', 'meetings', 'activities', 'automations', 'campaigns', 'notifications', 'integrations'];
-  for (const table of crmTables) {
-    try {
-      await db.run(`UPDATE ${table} SET userId = 'U-117bb402-3724-4580-9da9-01311b759889' WHERE userId IS NULL OR userId = 'U-admin'`);
-    } catch (e) {}
-  }
+  // ── Seed all tables from INITIAL_STORE (each table seeded only when empty) ──
 
-  // Seed users if empty
+  // Seed users
   const userCount = await db.get("SELECT COUNT(*) as count FROM users");
   if (userCount && userCount.count === 0) {
     for (const u of (INITIAL_STORE.users || [])) {
@@ -657,71 +559,92 @@ async function initDb(db) {
     }
   }
 
-  // Seed integrations if empty
+  // Seed integrations
   const intCount = await db.get("SELECT COUNT(*) as count FROM integrations");
   if (intCount && intCount.count === 0) {
-    const defaultIntegrations = [
-      { id: "whatsapp", name: "WhatsApp Business API", category: "Messaging", status: 1, desc: "Send automated WhatsApp follow-ups.", apiKey: "wa_live_94821048", webhookUrl: "https://api.ledgercrm.com/v1/webhooks/whatsapp", config: "{}", lastSync: "5 mins ago" },
-      { id: "meta_leads", name: "Meta Lead Ads", category: "Lead Capture", status: 1, desc: "Capture leads from Facebook and Instagram.", apiKey: "meta_access_token_84920", webhookUrl: "https://api.ledgercrm.com/v1/webhooks/meta-leads", config: "{}", lastSync: "12 mins ago" },
-      { id: "gmail", name: "Google Workspace / Gmail", category: "Email Sync", status: 1, desc: "2-way sync for customer emails.", apiKey: "gm_live_94827041823901", webhookUrl: "https://api.ledgercrm.com/v1/webhooks/gmail", config: "{}", lastSync: "2 mins ago" },
-      { id: "twilio", name: "Twilio Voice & SMS", category: "Telephony", status: 1, desc: "Click-to-call and SMS sequences.", apiKey: "AC948201948102948120", webhookUrl: "https://api.ledgercrm.com/v1/webhooks/twilio", config: "{}", lastSync: "30 mins ago" },
-      { id: "slack", name: "Slack Deal Alerts", category: "Alerts", status: 1, desc: "Post deal stage changes to Slack.", apiKey: "xoxb-948291048-sales-bot", webhookUrl: "https://hooks.slack.com/services/T00/B00/XXXX", config: "{}", lastSync: "10 mins ago" },
-      { id: "openai", name: "OpenAI GPT-4o Sales Copilot", category: "AI & Intelligence", status: 1, desc: "Generate AI email drafts and summaries.", apiKey: "sk-proj-openai-live-key", webhookUrl: "", config: "{}", lastSync: "Active" },
-      { id: "razorpay", name: "Razorpay Payments & Invoices", category: "Billing", status: 1, desc: "Generate payment links and track invoices.", apiKey: "rzp_live_948102948", webhookUrl: "https://api.ledgercrm.com/v1/webhooks/razorpay", config: "{}", lastSync: "45 mins ago" },
-      { id: "zapier", name: "Zapier Automations", category: "Workflow", status: 1, desc: "Connect CRM with 5,000+ web apps.", apiKey: "zap_live_83921048", webhookUrl: "https://hooks.zapier.com/hooks/catch/123/abc", config: "{}", lastSync: "1 hour ago" },
-    ];
-    for (const item of defaultIntegrations) {
+    for (const item of (INITIAL_STORE.integrations || [])) {
       try {
         await db.run(
           `INSERT INTO integrations (id, name, category, status, desc, apiKey, webhookUrl, config, lastSync, userId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [item.id, item.name, item.category, item.status, item.desc, item.apiKey, item.webhookUrl, item.config, item.lastSync, 'U-117bb402-3724-4580-9da9-01311b759889']
+          [item.id, item.name, item.category || '', item.status ? 1 : 0, item.desc || '', item.apiKey || '', item.webhookUrl || '', item.config || '{}', item.lastSync || 'Never', item.userId || 'U-117bb402-3724-4580-9da9-01311b759889']
         );
       } catch (e) {}
     }
   }
 
-  // Seed leads if empty
-  const leadCount = await db.get("SELECT COUNT(*) as count FROM leads");
-  if (leadCount && leadCount.count === 0 && INITIAL_STORE.leads && INITIAL_STORE.leads.length > 0) {
-    console.log(`Seeding ${INITIAL_STORE.leads.length} leads...`);
-    for (const l of INITIAL_STORE.leads) {
+  // Seed teams
+  const teamCount = await db.get("SELECT COUNT(*) as count FROM teams");
+  if (teamCount && teamCount.count === 0) {
+    for (const t of (INITIAL_STORE.teams || [])) {
       try {
         await db.run(
-          `INSERT INTO leads (id, name, initials, company, title, email, phone, status, priority, score, source, owner, ownerInitials, lastContact, nextFollowup, dealValue, dealValueNum, probability, created, industry, location, website, notes, userId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [l.id, l.name, l.initials, l.company, l.title, l.email, l.phone, l.status, l.priority, l.score, l.source, l.owner, l.ownerInitials, l.lastContact, l.nextFollowup, l.dealValue, l.dealValueNum, l.probability, l.created, l.industry, l.location, l.website, l.notes || '', l.userId]
+          `INSERT INTO teams (id, name, description, created, userId) VALUES (?, ?, ?, ?, ?)`,
+          [t.id, t.name, t.description || '', t.created, t.userId]
         );
       } catch (e) {}
     }
-    if (INITIAL_STORE.teams) {
-      for (const t of INITIAL_STORE.teams) {
-        try {
-          await db.run(`INSERT INTO teams (id, name, description, created, userId) VALUES (?, ?, ?, ?, ?)`, [t.id, t.name, t.description, t.created, t.userId]);
-        } catch (e) {}
-      }
+  }
+
+  // Seed team_members
+  const tmCount = await db.get("SELECT COUNT(*) as count FROM team_members");
+  if (tmCount && tmCount.count === 0) {
+    for (const tm of (INITIAL_STORE.team_members || [])) {
+      try {
+        await db.run(
+          `INSERT INTO team_members (id, teamId, name, initials, role, email, phone, tag, leads, calls, meetings, conv, revenue, won, lost, status, created, userId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [tm.id, tm.teamId, tm.name, tm.initials || '', tm.role || 'Member', tm.email || '', tm.phone || '', tm.tag || 'Member', tm.leads || 0, tm.calls || 0, tm.meetings || 0, tm.conv || 0, tm.revenue || 0, tm.won || 0, tm.lost || 0, tm.status || 'Active', tm.created, tm.userId]
+        );
+      } catch (e) {}
     }
-    if (INITIAL_STORE.team_members) {
-      for (const tm of INITIAL_STORE.team_members) {
-        try {
-          await db.run(
-            `INSERT INTO team_members (id, teamId, name, initials, role, email, phone, tag, leads, calls, meetings, conv, revenue, won, lost, status, created, userId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [tm.id, tm.teamId, tm.name, tm.initials, tm.role, tm.email, tm.phone, tm.tag, tm.leads, tm.calls, tm.meetings, tm.conv, tm.revenue, tm.won, tm.lost, tm.status, tm.created, tm.userId]
-          );
-        } catch (e) {}
-      }
+  }
+
+  // Seed leads
+  const leadCount = await db.get("SELECT COUNT(*) as count FROM leads");
+  if (leadCount && leadCount.count === 0) {
+    if (INITIAL_STORE.leads && INITIAL_STORE.leads.length > 0) {
+      console.log(`Seeding ${INITIAL_STORE.leads.length} leads from INITIAL_STORE...`);
     }
-    if (INITIAL_STORE.activities) {
-      for (const a of INITIAL_STORE.activities) {
-        try {
-          await db.run(`INSERT INTO activities (id, type, contact, company, description, date, time, owner, userId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [a.id, a.type, a.contact, a.company, a.description, a.date, a.time, a.owner, a.userId]);
-        } catch (e) {}
-      }
+    for (const l of (INITIAL_STORE.leads || [])) {
+      try {
+        await db.run(
+          `INSERT INTO leads (id, name, initials, company, title, email, phone, status, priority, score, source, owner, ownerInitials, lastContact, nextFollowup, dealValue, dealValueNum, probability, created, industry, location, website, notes, businessDescription, companySize, annualRevenue, businessModel, userId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [l.id, l.name, l.initials || '', l.company, l.title || '', l.email || '', l.phone || '', l.status || 'New', l.priority || 'Medium', l.score ?? 50, l.source || '', l.owner || '', l.ownerInitials || '', l.lastContact || '', l.nextFollowup || 'Not scheduled', l.dealValue || '₹0', l.dealValueNum ?? 0, l.probability ?? 100, l.created || '', l.industry || '', l.location || '', l.website || '', l.notes || '', l.businessDescription || '', l.companySize || '', l.annualRevenue || '', l.businessModel || '', l.userId || 'U-117bb402-3724-4580-9da9-01311b759889']
+        );
+      } catch (e) {}
     }
-    if (INITIAL_STORE.calls) {
-      for (const cl of INITIAL_STORE.calls) {
-        try {
-          await db.run(`INSERT INTO calls (id, contact, company, date, time, duration, outcome, notes, owner, userId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [cl.id, cl.contact, cl.company, cl.date, cl.time, cl.duration, cl.outcome, cl.notes, cl.owner, cl.userId]);
-        } catch (e) {}
-      }
+  }
+
+  // Seed calls
+  const callCount = await db.get("SELECT COUNT(*) as count FROM calls");
+  if (callCount && callCount.count === 0) {
+    for (const cl of (INITIAL_STORE.calls || [])) {
+      try {
+        await db.run(
+          `INSERT INTO calls (id, contact, company, date, time, duration, outcome, notes, owner, userId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [cl.id, cl.contact, cl.company || '', cl.date, cl.time || '', cl.duration || '', cl.outcome || '', cl.notes || '', cl.owner || '', cl.userId || 'U-117bb402-3724-4580-9da9-01311b759889']
+        );
+      } catch (e) {}
     }
+  }
+
+  // Seed activities
+  const actCount = await db.get("SELECT COUNT(*) as count FROM activities");
+  if (actCount && actCount.count === 0) {
+    for (const a of (INITIAL_STORE.activities || [])) {
+      try {
+        await db.run(
+          `INSERT INTO activities (id, type, contact, company, description, date, time, owner, userId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [a.id, a.type, a.contact, a.company || '', a.description || '', a.date, a.time || '', a.owner || '', a.userId || 'U-117bb402-3724-4580-9da9-01311b759889']
+        );
+      } catch (e) {}
+    }
+  }
+
+  // Fix any rows with NULL or legacy userId placeholders
+  const allCrmTables = ['leads', 'deals', 'customers', 'companies', 'teams', 'team_members', 'tasks', 'calls', 'meetings', 'activities', 'automations', 'campaigns', 'notifications', 'integrations'];
+  for (const table of allCrmTables) {
+    try {
+      await db.run(`UPDATE ${table} SET userId = 'U-117bb402-3724-4580-9da9-01311b759889' WHERE userId IS NULL OR userId = 'U-admin'`);
+    } catch (e) {}
   }
 }

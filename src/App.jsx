@@ -2,6 +2,7 @@ import React from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./store/AuthContext";
 import { CrmProvider } from "./store/CrmContext";
+import { ToastProvider } from "./components/ToastContext";
 import Shell from "./components/Shell";
 import Login from "./pages/Login";
 import AdminRegister from "./pages/AdminRegister";
@@ -18,12 +19,9 @@ import Calls from "./pages/Calls";
 import Meetings from "./pages/Meetings";
 import Tasks from "./pages/Tasks";
 import AiInsights from "./pages/AiInsights";
-import Automations from "./pages/Automations";
-import Campaigns from "./pages/Campaigns";
 import Reports from "./pages/Reports";
 import Team from "./pages/Team";
 import ImportExport from "./pages/ImportExport";
-import Integrations from "./pages/Integrations";
 import Settings from "./pages/Settings";
 
 // Protected wrapper — only renders children when logged in
@@ -32,15 +30,12 @@ function ProtectedApp() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center" style={{ background: "#F5F6F9" }}>
+      <div className="min-h-screen flex items-center justify-center" style={{ background: "#FAF9F6" }}>
         <div className="flex flex-col items-center gap-4">
-          <div
-            className="w-10 h-10 rounded-xl flex items-center justify-center"
-            style={{ background: "#3730E0" }}
-          >
-            <span className="text-white font-bold text-lg" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>S</span>
+          <div className="w-12 h-12 rounded-xl flex items-center justify-center overflow-hidden shrink-0 bg-[#1C1917] p-2 shadow-sm border border-[#292524]">
+            <img src="/logo.png" alt="Saivyy Logo" className="w-full h-full object-contain" />
           </div>
-          <div className="w-5 h-5 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: "#3730E0", borderTopColor: "transparent" }} />
+          <div className="w-5 h-5 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: "#BC5A1B", borderTopColor: "transparent" }} />
         </div>
       </div>
     );
@@ -65,12 +60,9 @@ function ProtectedApp() {
           <Route path="/meetings" element={<Meetings />} />
           <Route path="/tasks" element={<Tasks />} />
           <Route path="/ai" element={<AiInsights />} />
-          <Route path="/automations" element={<Automations />} />
-          <Route path="/campaigns" element={<Campaigns />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/team" element={<Team />} />
           <Route path="/importexport" element={<ImportExport />} />
-          <Route path="/integrations" element={<Integrations />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
@@ -82,14 +74,16 @@ function ProtectedApp() {
 export default function App() {
   return (
     <AuthProvider>
-      <BrowserRouter>
-        <Routes>
-          {/* Hidden admin-only registration route — accessible without login */}
-          <Route path="/admin" element={<AdminRegisterGate />} />
-          {/* All other routes go through normal auth */}
-          <Route path="/*" element={<ProtectedApp />} />
-        </Routes>
-      </BrowserRouter>
+      <ToastProvider>
+        <BrowserRouter>
+          <Routes>
+            {/* Hidden admin-only registration route — accessible without login */}
+            <Route path="/admin" element={<AdminRegisterGate />} />
+            {/* All other routes go through normal auth */}
+            <Route path="/*" element={<ProtectedApp />} />
+          </Routes>
+        </BrowserRouter>
+      </ToastProvider>
     </AuthProvider>
   );
 }

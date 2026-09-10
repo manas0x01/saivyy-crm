@@ -136,6 +136,13 @@ export function AuthProvider({ children }) {
     return data.members || [];
   };
 
+  const updateUserSession = (updatedUser) => {
+    if (!updatedUser) return;
+    const merged = { ...user, ...updatedUser };
+    localStorage.setItem("saivyy_crm_user", JSON.stringify(merged));
+    setUser(merged);
+  };
+
   const isImpersonating = Boolean(originalLeader);
 
   return (
@@ -151,6 +158,7 @@ export function AuthProvider({ children }) {
       impersonate,
       exitImpersonation,
       fetchOrgMembers,
+      updateUserSession,
     }}>
       {children}
     </AuthContext.Provider>

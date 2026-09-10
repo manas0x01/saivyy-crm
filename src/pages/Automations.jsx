@@ -2,17 +2,20 @@ import React, { useState } from "react";
 import { Zap, Plus, Play, Pause, CheckCircle2 } from "lucide-react";
 import { T } from "../tokens";
 import { useCrm } from "../store/CrmContext";
+import { useToast } from "../components/ToastContext";
 import Modal, { FormField, Input, Select, SubmitBtn } from "../components/Modal";
 
 export default function Automations() {
   const { state, dispatch } = useCrm();
+  const toast = useToast();
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState({ name: "", trigger: "Deal inactive for 7+ days", action: "Notify deal owner via in-app alert" });
 
   const setF = k => e => setForm(f => ({ ...f, [k]: e.target.value }));
   const submit = () => {
-    if (!form.name) return alert("Name required");
-    dispatch({ type: "ADD_AUTOMATION", payload: { ...form, status: "active" } });
+    if (!form.name.trim()) return toast.warning("Workflow name required");
+    dispatch({ type: "ADD_AUTOMATION", payload: { ...form, status: "active", triggered: 0 } });
+    toast.success(`Workflow "${form.name}" activated`);
     setShowAdd(false);
     setForm({ name: "", trigger: "Deal inactive for 7+ days", action: "Notify deal owner via in-app alert" });
   };

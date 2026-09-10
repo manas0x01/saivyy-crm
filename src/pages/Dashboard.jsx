@@ -14,8 +14,9 @@ import { T } from "../tokens";
 import { useCrm } from "../store/CrmContext";
 import { useAuth } from "../store/AuthContext";
 import { fmtINR, Avatar } from "../components/shared";
+import { filterByDateRange } from "../utils/dateFilter";
 
-const RANGES = ["Today", "This Week", "This Month", "This Quarter", "This Year"];
+const RANGES = ["Today", "This Week", "This Month", "This Quarter", "This Year", "All Time"];
 const ALL_STAGES = ["New", "Contacted", "Interested", "Qualified", "Meeting", "Proposal", "Negotiation", "Won"];
 const PIE_COLORS = [T.accent, T.positive, T.amber, T.negative, "#7C6FF0", "#0EA5E9", "#F59E0B", "#10B981"];
 
@@ -118,34 +119,41 @@ export default function Dashboard() {
   const { user } = useAuth();
   const navigate = useNavigate();
 
+  // ── Date-Filtered collections ─────────────────────────────────────────────
+  const filteredDeals = useMemo(() => filterByDateRange(state.deals || [], range, ['close', 'last']), [state.deals, range]);
+  const filteredLeads = useMemo(() => filterByDateRange(state.leads || [], range, ['created', 'lastContact']), [state.leads, range]);
+  const filteredCalls = useMemo(() => filterByDateRange(state.calls || [], range, ['date']), [state.calls, range]);
+  const filteredMeetings = useMemo(() => filterByDateRange(state.meetings || [], range, ['date']), [state.meetings, range]);
+  const filteredTasks = useMemo(() => filterByDateRange(state.tasks || [], range, ['dueDate', 'created']), [state.tasks, range]);
+
   // ── Core computations ──────────────────────────────────────────────────────
-  const openDeals   = useMemo(() => state.deals.filter(d => d.stage !== "Lost"), [state.deals]);
-  const wonDeals    = useMemo(() => state.deals.filter(d => d.stage === "Won"),  [state.deals]);
-  const lostDeals   = useMemo(() => state.deals.filter(d => d.stage === "Lost"), [state.deals]);
+  const openDeals   = useMemo(() => filteredDeals.filter(d => d.stage !== "Lost"), [filteredDeals]);
+  const wonDeals    = useMemo(() => filteredDeals.filter(d => d.stage === "Won"),  [filteredDeals]);
+  const lostDeals   = useMemo(() => filteredDeals.filter(d => d.stage === "Lost"), [filteredDeals]);
 
   const pipelineVal = useMemo(() => openDeals.reduce((s, d) => s + (d.value || 0), 0), [openDeals]);
   const wonRevenue  = useMemo(() => wonDeals.reduce((s, d) => s + (d.value || 0), 0), [wonDeals]);
   const avgDealSize = openDeals.length > 0 ? Math.round(pipelineVal / openDeals.length) : 0;
-  const winRate     = state.deals.length > 0 ? ((wonDeals.length / state.deals.length) * 100).toFixed(1) : "0.0";
+  const winRate     = filteredDeals.length > 0 ? ((wonDeals.length / filteredDeals.length) * 100).toFixed(1) : "0.0";
 
-  const totalLeads  = state.leads.length;
-  const newLeads    = state.leads.filter(l => l.status === "New").length;
-  const hotLeads    = useMemo(() => state.leads.filter(l => (l.score || 0) >= 75), [state.leads]);
+  const totalLeads  = filteredLeads.length;
+  const newLeads    = filteredLeads.filter(l => l.status === "New").length;
+  const hotLeads    = useMemo(() => filteredLeads.filter(l => (l.score || 0) >= 75), [filteredLeads]);
   const convRate    = totalLeads > 0 ? ((wonDeals.length / totalLeads) * 100).toFixed(1) : "0.0";
 
-  const pendingTasks  = state.tasks.filter(t => !t.completed).length;
-  const overdueTasks  = state.tasks.filter(t => !t.completed && (t.dueDate === "Overdue" || t.dueDate === "Today")).length;
-  const totalCalls    = state.calls.length;
-  const totalMeetings = state.meetings.length;
+  const pendingTasks  = filteredTasks.filter(t => !t.completed).length;
+  const overdueTasks  = filteredTasks.filter(t => !t.completed && (t.dueDate === "Overdue" || t.dueDate === "Today")).length;
+  const totalCalls    = filteredCalls.length;
+  const totalMeetings = filteredMeetings.length;
 
   const atRisk = useMemo(() =>
-    state.deals.filter(d => String(d.next || "").toLowerCase().includes("overdue") || (d.score || 0) < 50),
-    [state.deals]);
+    filteredDeals.filter(d => String(d.next || "").toLowerCase().includes("overdue") || (d.score || 0) < 50),
+    [filteredDeals]);
 
   // ── Pipeline stage breakdown ───────────────────────────────────────────────
   const pipelineStages = useMemo(() => {
     return ALL_STAGES.map(stage => {
-      const stageDeals = state.deals.filter(d => d.stage === stage);
+      const stageDeals = filteredDeals.filter(d => d.stage === stage);
       return {
         stage,
         short: stage.slice(0, 3),
@@ -153,22 +161,22 @@ export default function Dashboard() {
         value: stageDeals.reduce((s, d) => s + (d.value || 0), 0),
       };
     });
-  }, [state.deals]);
+  }, [filteredDeals]);
   const maxStageCount = Math.max(...pipelineStages.map(s => s.count), 1);
 
   // ── Lead source breakdown (pie) ───────────────────────────────────────────
   const leadsBySource = useMemo(() => {
     const map = {};
-    state.leads.forEach(l => { const s = l.source || "Direct"; map[s] = (map[s] || 0) + 1; });
+    filteredLeads.forEach(l => { const s = l.source || "Direct"; map[s] = (map[s] || 0) + 1; });
     return Object.entries(map).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
-  }, [state.leads]);
+  }, [filteredLeads]);
 
   // ── Lead status distribution (bar) ────────────────────────────────────────
   const leadsByStatus = useMemo(() => {
     const map = {};
-    state.leads.forEach(l => { const s = l.status || "New"; map[s] = (map[s] || 0) + 1; });
+    filteredLeads.forEach(l => { const s = l.status || "New"; map[s] = (map[s] || 0) + 1; });
     return Object.entries(map).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count).slice(0, 6);
-  }, [state.leads]);
+  }, [filteredLeads]);
 
   // ── Revenue trend (monthly aggregated from deals) ─────────────────────────
   const revenueTrend = useMemo(() => {

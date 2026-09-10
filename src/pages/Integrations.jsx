@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { T } from "../tokens";
 import { useCrm } from "../store/CrmContext";
+import { useToast } from "../components/ToastContext";
 import Modal, { FormField, Input, Select, Textarea, SubmitBtn } from "../components/Modal";
 import * as api from "../services/api";
 
@@ -41,6 +42,7 @@ function getCategoryIcon(category, id) {
 
 export default function Integrations() {
   const { state, dispatch } = useCrm();
+  const toast = useToast();
   const [filter, setFilter] = useState("All");
   const [query, setQuery] = useState("");
   
@@ -72,11 +74,12 @@ export default function Integrations() {
   // Handle Add Integration
   const setAdd = k => e => setAddForm(f => ({ ...f, [k]: e.target.value }));
   const submitAdd = () => {
-    if (!addForm.name) return alert("Integration name is required");
+    if (!addForm.name.trim()) return toast.warning("Integration name is required");
     dispatch({
       type: "ADD_INTEGRATION",
       payload: { ...addForm, status: true, lastSync: "Just connected", config: "{}" }
     });
+    toast.success(`Integration "${addForm.name}" added`);
     setShowAdd(false);
     setAddForm({ name: "", category: "Messaging", desc: "", apiKey: "", webhookUrl: "" });
   };
@@ -107,6 +110,7 @@ export default function Integrations() {
         status: configItem.status
       }
     });
+    toast.success(`Configuration for "${configItem.name}" updated`);
     setConfigItem(null);
   };
 
@@ -258,8 +262,11 @@ export default function Integrations() {
                     <Settings2 size={13} /> Configure API
                   </button>
                   <button
-                    onClick={() => { if (window.confirm(`Delete integration "${item.name}"?`)) dispatch({ type: "DELETE_INTEGRATION", payload: item.id }); }}
-                    className="crm-focusable p-1.5 rounded-lg text-gray-400 hover:text-red-500"
+                    onClick={() => {
+                      dispatch({ type: "DELETE_INTEGRATION", payload: item.id });
+                      toast.success(`Integration "${item.name}" deleted`);
+                    }}
+                    className="crm-focusable p-1.5 rounded-lg text-gray-400 hover:text-red-500 transition-colors"
                     title="Delete integration"
                   >
                     <Trash2 size={14} />
@@ -267,7 +274,10 @@ export default function Integrations() {
                 </div>
 
                 <button
-                  onClick={() => dispatch({ type: "TOGGLE_INTEGRATION", payload: item.id })}
+                  onClick={() => {
+                    dispatch({ type: "TOGGLE_INTEGRATION", payload: item.id });
+                    toast.info(item.status ? `Disconnected "${item.name}"` : `Connected "${item.name}"`);
+                  }}
                   className="crm-focusable px-3.5 py-1.5 rounded-lg text-[12px] font-semibold flex items-center gap-1.5"
                   style={{
                     background: item.status ? T.positiveSoft : T.accentSoft,

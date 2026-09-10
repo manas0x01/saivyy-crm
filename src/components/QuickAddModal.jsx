@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { T } from "../tokens";
 import { useCrm } from "../store/CrmContext";
+import { useToast } from "./ToastContext";
 import Modal, { FormField, Input, Select, Textarea, SubmitBtn } from "./Modal";
 
 const TABS = ["Lead", "Deal", "Task", "Activity"];
@@ -13,6 +14,7 @@ function createLeadId() {
 export default function QuickAddModal({ open, onClose }) {
   const [tab, setTab] = useState("Lead");
   const { state, dispatch } = useCrm();
+  const toast = useToast();
 
   const teamList = useMemo(() => {
     if (state.team && state.team.length > 0) return state.team.map(m => m.name);
@@ -35,25 +37,26 @@ export default function QuickAddModal({ open, onClose }) {
         ))}
       </div>
 
-      {tab === "Lead" && <AddLeadForm dispatch={dispatch} teamList={teamList} onClose={onClose} />}
-      {tab === "Deal" && <AddDealForm dispatch={dispatch} teamList={teamList} onClose={onClose} />}
-      {tab === "Task" && <AddTaskForm dispatch={dispatch} teamList={teamList} onClose={onClose} />}
-      {tab === "Activity" && <AddActivityForm dispatch={dispatch} teamList={teamList} onClose={onClose} />}
+      {tab === "Lead" && <AddLeadForm dispatch={dispatch} teamList={teamList} onClose={onClose} toast={toast} />}
+      {tab === "Deal" && <AddDealForm dispatch={dispatch} teamList={teamList} onClose={onClose} toast={toast} />}
+      {tab === "Task" && <AddTaskForm dispatch={dispatch} teamList={teamList} onClose={onClose} toast={toast} />}
+      {tab === "Activity" && <AddActivityForm dispatch={dispatch} teamList={teamList} onClose={onClose} toast={toast} />}
     </Modal>
   );
 }
 
-function AddLeadForm({ dispatch, teamList, onClose }) {
+function AddLeadForm({ dispatch, teamList, onClose, toast }) {
   const [form, setForm] = useState({ name: "", company: "", email: "", phone: "", status: "New", priority: "Medium", source: "Website", owner: teamList[0] || "", dealValue: "0", industry: "", location: "" });
   const activeOwner = form.owner || teamList[0] || "Unassigned";
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const submit = () => {
-    if (!form.name || !form.company) return alert("Name and company are required");
+    if (!form.name.trim() || !form.company.trim()) return toast.warning("Name and company are required");
     const ownerToSave = activeOwner;
     const initials = form.name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
     const ownerInitials = ownerToSave.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
     dispatch({ type: "ADD_LEAD", payload: { id: createLeadId(), ...form, owner: ownerToSave, initials, ownerInitials, score: 40, probability: 100, dealValueNum: 0, lastContact: "Just now", nextFollowup: "Not scheduled", created: new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }), notes: "", website: "" } });
+    toast.success(`Lead "${form.name}" added successfully`);
     onClose();
   };
   return (
@@ -84,15 +87,16 @@ function AddLeadForm({ dispatch, teamList, onClose }) {
   );
 }
 
-function AddDealForm({ dispatch, teamList, onClose }) {
+function AddDealForm({ dispatch, teamList, onClose, toast }) {
   const [form, setForm] = useState({ deal: "", company: "", value: "", stage: "New", priority: "Medium", ownerFull: teamList[0] || "", close: "", probability: 20 });
   const activeOwner = form.ownerFull || teamList[0] || "Unassigned";
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const submit = () => {
-    if (!form.deal || !form.company) return alert("Deal name and company are required");
+    if (!form.deal.trim() || !form.company.trim()) return toast.warning("Deal name and company are required");
     const ownerInitials = activeOwner.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
     dispatch({ type: "ADD_DEAL", payload: { ...form, ownerFull: activeOwner, owner: ownerInitials, value: parseInt(form.value.replace(/[^0-9]/g, "")) || 0, score: 50, last: "Just now", next: "Not scheduled" } });
+    toast.success(`Deal "${form.deal}" created successfully`);
     onClose();
   };
   return (
@@ -115,14 +119,15 @@ function AddDealForm({ dispatch, teamList, onClose }) {
   );
 }
 
-function AddTaskForm({ dispatch, teamList, onClose }) {
+function AddTaskForm({ dispatch, teamList, onClose, toast }) {
   const [form, setForm] = useState({ title: "", linkedLead: "", dueDate: "", priority: "Normal", owner: teamList[0] || "" });
   const activeOwner = form.owner || teamList[0] || "Unassigned";
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const submit = () => {
-    if (!form.title) return alert("Task title is required");
+    if (!form.title.trim()) return toast.warning("Task title is required");
     dispatch({ type: "ADD_TASK", payload: { ...form, owner: activeOwner, created: new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) } });
+    toast.success(`Task "${form.title}" created`);
     onClose();
   };
   return (
@@ -141,15 +146,16 @@ function AddTaskForm({ dispatch, teamList, onClose }) {
   );
 }
 
-function AddActivityForm({ dispatch, teamList, onClose }) {
+function AddActivityForm({ dispatch, teamList, onClose, toast }) {
   const [form, setForm] = useState({ type: "Call", contact: "", company: "", description: "", owner: teamList[0] || "" });
   const activeOwner = form.owner || teamList[0] || "Unassigned";
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const submit = () => {
-    if (!form.contact || !form.description) return alert("Contact and description are required");
+    if (!form.contact.trim() || !form.description.trim()) return toast.warning("Contact and description are required");
     const now = new Date();
     dispatch({ type: "ADD_ACTIVITY", payload: { ...form, owner: activeOwner, date: now.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }), time: now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }) } });
+    toast.success(`Activity logged for ${form.contact}`);
     onClose();
   };
   return (
