@@ -1,3 +1,4 @@
+try { process.loadEnvFile(); } catch {}
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';

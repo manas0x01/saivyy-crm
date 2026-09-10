@@ -22,6 +22,14 @@ export default function Settings() {
   const [saving, setSaving] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [dbHealth, setDbHealth] = useState(null);
+
+  useEffect(() => {
+    fetch('/api/health')
+      .then(res => res.json())
+      .then(data => setDbHealth(data))
+      .catch(err => console.warn('Could not fetch DB health:', err));
+  }, []);
 
   useEffect(() => {
     if (user) {
@@ -194,19 +202,44 @@ export default function Settings() {
 
       {/* Database & Data Controls */}
       <div className="crm-card rounded-xl p-5 flex flex-col gap-4" style={{ background: T.surface, border: `1px solid ${T.line}` }}>
-        <h2 className="crm-display text-[15px] font-semibold flex items-center gap-2" style={{ color: T.ink }}>
-          <Database size={16} style={{ color: T.accent }} /> SQLite Database Engine & Reset
-        </h2>
-        <div className="text-[12.5px] space-y-1" style={{ color: T.inkFaint }}>
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <h2 className="crm-display text-[15px] font-semibold flex items-center gap-2" style={{ color: T.ink }}>
+            <Database size={16} style={{ color: T.accent }} /> Database Engine & Persistence
+          </h2>
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <span className="text-[12px] font-medium text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
+              {dbHealth?.db ? `${dbHealth.db} Connected` : "Connected"}
+            </span>
+          </div>
+        </div>
+
+        <div className="text-[12.5px] space-y-2" style={{ color: T.inkFaint }}>
+          <div className="p-3 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-2" style={{ background: T.bg, border: `1px solid ${T.line}` }}>
+            <div>
+              <div className="font-semibold text-[13px]" style={{ color: T.ink }}>
+                {dbHealth?.DATABASE_URL_SET ? "Neon Cloud PostgreSQL" : (dbHealth?.db || "Database Engine")}
+              </div>
+              <div className="text-[12px] mt-0.5" style={{ color: T.inkFaint }}>
+                {dbHealth?.DATABASE_URL_SET
+                  ? "Permanent cloud storage via Neon PostgreSQL — data is permanently persisted across all redeploys."
+                  : "Local development database with automatic cloud PostgreSQL sync support."}
+              </div>
+            </div>
+            {dbHealth?.counts && (
+              <div className="flex items-center gap-2 shrink-0 text-[11.5px] font-mono text-[#57534E]">
+                <span className="px-2 py-1 rounded bg-stone-200/60 font-semibold">{dbHealth.counts.leads ?? 0} Leads</span>
+                <span className="px-2 py-1 rounded bg-stone-200/60 font-semibold">{dbHealth.counts.users ?? 0} Users</span>
+                <span className="px-2 py-1 rounded bg-stone-200/60 font-semibold">{dbHealth.counts.teams ?? 0} Teams</span>
+              </div>
+            )}
+          </div>
           <p>
-            Connected to local embedded SQLite database (<code className="font-mono text-[11.5px] px-1 py-0.5 rounded bg-gray-100">crm.sqlite</code>) with real-time transactional sync.
-          </p>
-          <p>
-            You can clear all demo leads, deals, tasks, and calls to start with an authentic empty CRM for actual customer deployments.
+            You can clear all operational leads, deals, tasks, and calls to start with a clean CRM for live customer deployments.
           </p>
         </div>
 
-        <div className="pt-2">
+        <div className="pt-1">
           <button
             onClick={() => setShowResetConfirm(true)}
             className="crm-focusable px-4 py-2.5 rounded-lg text-[12.5px] font-semibold flex items-center gap-2 transition hover:opacity-90"
