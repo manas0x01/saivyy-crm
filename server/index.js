@@ -255,6 +255,29 @@ app.post('/api/auth/impersonate', async (req, res) => {
 
 // ---------------- API ENDPOINTS (SEGREGATED BY ROLE/ORG) ----------------
 
+// Health check — visit /api/health to verify DB is connected and data is loaded
+app.get('/api/health', async (req, res) => {
+  try {
+    const db = await getDb();
+    const leads   = await db.get('SELECT COUNT(*) as count FROM leads');
+    const users   = await db.get('SELECT COUNT(*) as count FROM users');
+    const teams   = await db.get('SELECT COUNT(*) as count FROM teams');
+    const dbType  = process.env.DATABASE_URL ? 'PostgreSQL (Neon)' : 'SQLite (local)';
+    res.json({
+      status: 'ok',
+      db: dbType,
+      DATABASE_URL_SET: !!process.env.DATABASE_URL,
+      counts: {
+        leads:  Number(leads?.count  ?? 0),
+        users:  Number(users?.count  ?? 0),
+        teams:  Number(teams?.count  ?? 0),
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message, DATABASE_URL_SET: !!process.env.DATABASE_URL });
+  }
+});
+
 app.get('/api/crm/state', async (req, res) => {
   try {
     const db = await getDb();
