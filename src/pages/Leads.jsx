@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useRef, useEffect } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   Search, Plus, ChevronDown, ChevronRight, ArrowUpDown,
   ArrowLeft, Mail, Phone, PhoneCall, CalendarPlus, StickyNote, Building, MapPin, Globe,
@@ -768,10 +768,16 @@ function BusinessDetailsTab({ lead }) {
   );
 }
 
+function createLeadId() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) return `L-${crypto.randomUUID()}`;
+  return `L-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export default function Leads() {
   const { state, dispatch } = useCrm();
   const { user } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
   const toast = useToast();
   const isLeader = user?.role === "Leader";
 
@@ -1069,6 +1075,7 @@ export default function Leads() {
     dispatch({
       type: "ADD_LEAD",
       payload: {
+        id: createLeadId(),
         ...addForm,
         status: finalStatus,
         owner: ownerToSave,
@@ -1226,9 +1233,22 @@ export default function Leads() {
             <span className="text-[11.5px] font-medium" style={{ color: T.inkFaint }}>Click any cell to edit inline</span>
           </p>
         </div>
-        <button onClick={() => setShowAddModal(true)} className="crm-focusable flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12.5px] font-semibold" style={{ background: T.accent, color: "#fff" }}>
-          <Plus size={14} /> Add lead
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => navigate("/importexport")}
+            className="crm-focusable flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12.5px] font-semibold transition hover:opacity-90"
+            style={{ background: T.surface, color: T.ink, border: `1px solid ${T.line}` }}
+          >
+            <FileSpreadsheet size={14} className="text-emerald-600" /> Import Excel
+          </button>
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="crm-focusable flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12.5px] font-semibold shadow-sm transition hover:opacity-90"
+            style={{ background: T.accent, color: "#fff" }}
+          >
+            <Plus size={14} /> Add lead
+          </button>
+        </div>
       </div>
 
       {/* Saved views — scrollable horizontal pill bar on mobile */}

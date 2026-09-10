@@ -60,10 +60,7 @@ function parseMaybeNumber(value) {
 function normalizeMobile(rawValue) {
   if (rawValue === undefined || rawValue === null) return "";
   const normalized = String(rawValue).trim();
-  if (!normalized) return "";
-  const digits = normalized.replace(/\D/g, "");
-  if (digits.length < 10 || digits.length > 15) return "";
-  return normalized.replace(/\s+/g, " ");
+  return normalized;
 }
 
 function createLeadId() {
@@ -73,7 +70,7 @@ function createLeadId() {
 
 export default function ImportExport() {
   const navigate = useNavigate();
-  const { state, dispatch } = useCrm();
+  const { state, dispatch, refreshData } = useCrm();
   const { user, fetchOrgMembers } = useAuth();
   const toast = useToast();
 
@@ -258,29 +255,54 @@ export default function ImportExport() {
     let skipped = 0;
 
     for (const row of fileData) {
-      const name = findRowValue(row, ["name", "fullname", "leadname", "contact", "person", "firstname", "customer"], 0);
-      if (!name) { skippedNoName++; continue; }
-      const company = findRowValue(row, ["company", "companyname", "organization", "org", "business", "firm"], 1) || "Direct Client";
-      const payload = buildLeadPayload(name, company, row, "Excel Import");
-      if (!payload.phone) {
+      let name = findRowValue(row, ["name", "fullname", "leadname", "contact", "person", "firstname", "customer", "contactperson", "client", "lead"], 0);
+      const company = findRowValue(row, ["company", "companyname", "organization", "org", "business", "firm", "account"], 1) || "Direct Client";
+      
+      // If name is blank, fallback to email, phone, or company
+      if (!name) {
+        name = findRowValue(row, ["email", "emailid", "mail"]) || findRowValue(row, ["phone", "mobile"]) || (company !== "Direct Client" ? company : "");
+      }
+      if (!name) {
         skipped++;
         continue;
       }
+
+      const payload = buildLeadPayload(name, company, row, "Excel Import");
       batchPayloads.push(payload);
     }
 
-    if (batchPayloads.length > 0) {
-      await dispatch({ type: "BATCH_ADD_LEADS", payload: batchPayloads });
+    if (batchPayloads.length === 0) {
+      setImporting(false);
+      return toast.warning("Could not find any readable rows in the uploaded file.", "Empty Data");
     }
 
-    setImporting(false);
-    setImportedCount(batchPayloads.length);
-    setFileData(null);
-    setFileName("");
+    try {
+      // 1. Direct API call to backend /api/leads/bulk (saves permanently to PostgreSQL)
+      const res = await bulkCreateLeads(batchPayloads);
+      
+      // 2. Update local state
+      dispatch({ type: "BATCH_ADD_LEADS", payload: batchPayloads });
+      
+      // 3. Immediately refresh latest state from database
+      if (refreshData) {
+        await refreshData();
+      }
 
-    toast.success(`Successfully imported ${batchPayloads.length} leads in batch!`, "Import Complete");
-    if (skipped > 0) {
-      toast.info(`Skipped ${skipped} rows without valid mobile phone numbers`, "Row Validation");
+      const count = res?.inserted ?? batchPayloads.length;
+      setImportedCount(count);
+      setFileData(null);
+      setFileName("");
+      toast.success(`Successfully imported ${count} leads into the CRM!`, "Import Complete");
+
+      // Redirect to Leads page so the user can immediately see the new leads
+      setTimeout(() => {
+        navigate("/leads");
+      }, 700);
+    } catch (err) {
+      console.error("Import error:", err);
+      toast.error(`Import failed: ${err.message || "Network error"}`);
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -301,29 +323,42 @@ export default function ImportExport() {
       else if (line.includes(";")) parts = line.split(";");
       else parts = line.split(",");
       parts = parts.map(p => p.trim().replace(/^"|"$/g, ""));
-      const name = parts[0];
-      if (!name) continue;
+      let name = parts[0];
       const company = parts[1] || "Direct Client";
-      const rowObj = { Name: name, Company: company, Email: parts[2] || "", Phone: parts[3] || "", Status: parts[4] || "" };
-      const payload = buildLeadPayload(name, company, rowObj, "Pasted CSV");
-      if (!payload.phone) {
+      if (!name) {
+        name = parts[2] || parts[3] || (company !== "Direct Client" ? company : "");
+      }
+      if (!name) {
         skipped++;
         continue;
       }
+      const rowObj = { Name: name, Company: company, Email: parts[2] || "", Phone: parts[3] || "", Status: parts[4] || "" };
+      const payload = buildLeadPayload(name, company, rowObj, "Pasted CSV");
       batchPayloads.push(payload);
     }
 
-    if (batchPayloads.length > 0) {
-      await dispatch({ type: "BATCH_ADD_LEADS", payload: batchPayloads });
+    if (batchPayloads.length === 0) {
+      setImporting(false);
+      return toast.warning("No readable rows found in pasted text.");
     }
 
-    setImporting(false);
-    setImportedCount(batchPayloads.length);
-    setCsvText("");
-
-    toast.success(`Successfully imported ${batchPayloads.length} leads in batch!`, "Import Complete");
-    if (skipped > 0) {
-      toast.info(`Skipped ${skipped} rows without valid mobile phone numbers`, "Row Validation");
+    try {
+      const res = await bulkCreateLeads(batchPayloads);
+      dispatch({ type: "BATCH_ADD_LEADS", payload: batchPayloads });
+      if (refreshData) {
+        await refreshData();
+      }
+      const count = res?.inserted ?? batchPayloads.length;
+      setImportedCount(count);
+      setCsvText("");
+      toast.success(`Successfully imported ${count} leads into the CRM!`, "Import Complete");
+      setTimeout(() => {
+        navigate("/leads");
+      }, 700);
+    } catch (err) {
+      toast.error(`Import failed: ${err.message || "Network error"}`);
+    } finally {
+      setImporting(false);
     }
   };
 

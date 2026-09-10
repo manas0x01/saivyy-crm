@@ -159,30 +159,32 @@ export function CrmProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, emptyState);
   const { user } = useAuth();
 
+  // Helper to fetch latest state from API
+  const refreshData = async () => {
+    if (!user) {
+      dispatch({ type: "SET_STATE", payload: { ...emptyState, loading: false } });
+      return null;
+    }
+    try {
+      const data = await api.fetchCrmState();
+      dispatch({ type: "SET_STATE", payload: { ...data, loading: false } });
+      return data;
+    } catch (err) {
+      console.error("Backend error loading state:", err);
+      dispatch({ type: "SET_STATE", payload: { loading: false } });
+      return null;
+    }
+  };
+
   // Load from API backend on user mount or change & auto-poll every 5 seconds for live telephony updates
   useEffect(() => {
     let intervalId = null;
-
-    async function loadData() {
-      if (!user) {
-        dispatch({ type: "SET_STATE", payload: { ...emptyState, loading: false } });
-        return;
-      }
-      try {
-        const data = await api.fetchCrmState();
-        dispatch({ type: "SET_STATE", payload: { ...data, loading: false } });
-      } catch (err) {
-        console.error("Backend error loading state:", err);
-        dispatch({ type: "SET_STATE", payload: { loading: false } });
-      }
-    }
-
-    loadData();
+    refreshData();
 
     // Poll backend every 5 seconds for real-time telephony, leads, and call logs
     if (user) {
       intervalId = setInterval(() => {
-        loadData();
+        refreshData();
       }, 5000);
     }
 
@@ -203,7 +205,11 @@ export function CrmProvider({ children }) {
           await api.createLead(action.payload);
           break;
         case "BATCH_ADD_LEADS":
-          await api.createBatchLeads(action.payload);
+          if (api.bulkCreateLeads) {
+            await api.bulkCreateLeads(action.payload);
+          } else if (api.createBatchLeads) {
+            await api.createBatchLeads(action.payload);
+          }
           break;
         case "CONVERT_LEAD":
           await api.convertLead(action.payload);
@@ -316,7 +322,7 @@ export function CrmProvider({ children }) {
     }
   };
 
-  return <CrmContext.Provider value={{ state, dispatch: asyncDispatch }}>{children}</CrmContext.Provider>;
+  return <CrmContext.Provider value={{ state, dispatch: asyncDispatch, refreshData }}>{children}</CrmContext.Provider>;
 }
 
 export function useCrm() {

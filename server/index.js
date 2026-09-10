@@ -455,13 +455,18 @@ app.post('/api/leads', async (req, res) => {
   try {
     const db = await getDb();
     const l = req.body;
-    const requesterId = req.headers['x-user-id'] || 'U-admin';
+    let requesterId = req.headers['x-user-id'] || 'U-admin';
     const id = l.id || generateId('L');
 
-    // Leaders can assign leads directly to a team member via assignedUserId
-    let userId = requesterId;
+    // Ensure valid requester ID & fallback
+    const requester = await db.get('SELECT id, role, orgId FROM users WHERE id = ?', [requesterId]);
+    let userId = requester?.id;
+    if (!userId) {
+      const anyLeader = await db.get("SELECT id FROM users WHERE role = 'Leader' LIMIT 1");
+      userId = anyLeader?.id || requesterId;
+    }
+
     if (l.assignedUserId && l.assignedUserId !== requesterId) {
-      const requester = await db.get('SELECT role, orgId FROM users WHERE id = ?', [requesterId]);
       if (requester && (requester.role === 'Leader' || requester.role === 'Admin')) {
         const target = await db.get(
           'SELECT id FROM users WHERE id = ? AND orgId = ?',
@@ -470,10 +475,26 @@ app.post('/api/leads', async (req, res) => {
         if (target) userId = l.assignedUserId;
       }
     }
+
+    const name = (l.name || l.company || 'New Lead').trim();
+    const company = (l.company || 'Direct Client').trim();
+    const initials = l.initials || name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2) || 'LD';
+    const owner = l.owner || requester?.name || 'Unassigned';
+    const ownerInitials = l.ownerInitials || owner.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
+
     await db.run(
       `INSERT INTO leads (id, name, initials, company, title, email, phone, status, priority, score, source, owner, ownerInitials, lastContact, nextFollowup, dealValue, dealValueNum, probability, created, industry, location, website, notes, businessDescription, companySize, annualRevenue, businessModel, userId)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, l.name, l.initials, l.company, l.title, l.email, l.phone, l.status, l.priority, l.score ?? 40, l.source, l.owner, l.ownerInitials, l.lastContact, l.nextFollowup, l.dealValue, l.dealValueNum ?? 0, l.probability ?? 100, l.created, l.industry, l.location, l.website, l.notes || '', l.businessDescription || '', l.companySize || '', l.annualRevenue || '', l.businessModel || '', userId]
+      [
+        id, name, initials, company, l.title || '', l.email || '', l.phone || '',
+        l.status || 'New', l.priority || 'Medium', Number(l.score) || 40, l.source || 'Manual',
+        owner, ownerInitials, l.lastContact || new Date().toISOString(),
+        l.nextFollowup || 'Not scheduled', l.dealValue || '₹0', Number(l.dealValueNum) || 0,
+        Number(l.probability) || 100, l.created || new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
+        l.industry || '', l.location || '', l.website || '', l.notes || '',
+        l.businessDescription || '', l.companySize || '', l.annualRevenue || '', l.businessModel || '',
+        userId
+      ]
     );
     const newLead = await db.get('SELECT * FROM leads WHERE id = ?', [id]);
     res.json(newLead);
@@ -483,44 +504,104 @@ app.post('/api/leads', async (req, res) => {
 });
 
 // Bulk import endpoint — inserts many leads in one request (used by Excel import for speed)
-app.post('/api/leads/bulk', async (req, res) => {
+app.post(['/api/leads/bulk', '/api/leads/batch'], async (req, res) => {
   try {
     const db = await getDb();
-    const leads = req.body;
+    let leads = req.body;
+    if (leads && !Array.isArray(leads) && Array.isArray(leads.leads)) {
+      leads = leads.leads;
+    }
     const requesterId = req.headers['x-user-id'] || 'U-admin';
     if (!Array.isArray(leads) || leads.length === 0) {
       return res.status(400).json({ error: 'Body must be a non-empty array of leads' });
     }
 
-    // Resolve permission once
-    let requesterRole = 'Member';
-    let requesterOrgId = null;
+    // Resolve requester permission & fallback to organization leader if needed
+    let requesterRole = 'Leader';
+    let requesterOrgId = 'ORG-saivyy-default';
+    let defaultUserId = requesterId;
     try {
-      const requester = await db.get('SELECT role, orgId FROM users WHERE id = ?', [requesterId]);
-      if (requester) { requesterRole = requester.role; requesterOrgId = requester.orgId; }
+      const requester = await db.get('SELECT id, role, orgId FROM users WHERE id = ?', [requesterId]);
+      if (requester) {
+        requesterRole = requester.role;
+        requesterOrgId = requester.orgId;
+        defaultUserId = requester.id;
+      } else {
+        const anyLeader = await db.get("SELECT id, role, orgId FROM users WHERE role = 'Leader' LIMIT 1");
+        if (anyLeader) {
+          defaultUserId = anyLeader.id;
+          requesterOrgId = anyLeader.orgId;
+        }
+      }
     } catch (_) {}
 
-    let insertedCount = 0;
-    // Insert in reverse order so that ORDER BY rowid DESC retrieves them in original Excel row order (Row 1 on top)
+    // Reverse leads so row 1 in Excel ends up on top with ORDER BY rowid DESC
     const reversedLeads = [...leads].reverse();
-    for (const l of reversedLeads) {
-      try {
+    let insertedCount = 0;
+
+    // Process in chunks of 35 rows for fast multi-row insertion
+    const CHUNK_SIZE = 35;
+    for (let c = 0; c < reversedLeads.length; c += CHUNK_SIZE) {
+      const chunk = reversedLeads.slice(c, c + CHUNK_SIZE);
+      const rows = [];
+
+      for (const l of chunk) {
         const id = l.id || generateId('L');
-        let userId = requesterId;
+        let userId = defaultUserId;
         if (l.assignedUserId && l.assignedUserId !== requesterId && (requesterRole === 'Leader' || requesterRole === 'Admin')) {
-          const target = await db.get('SELECT id FROM users WHERE id = ? AND orgId = ?', [l.assignedUserId, requesterOrgId]);
-          if (target) userId = l.assignedUserId;
+          try {
+            const target = await db.get('SELECT id FROM users WHERE id = ? AND orgId = ?', [l.assignedUserId, requesterOrgId]);
+            if (target) userId = l.assignedUserId;
+          } catch (_) {}
         }
-        await db.run(
-          `INSERT INTO leads (id, name, initials, company, title, email, phone, status, priority, score, source, owner, ownerInitials, lastContact, nextFollowup, dealValue, dealValueNum, probability, created, industry, location, website, notes, businessDescription, companySize, annualRevenue, businessModel, userId)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [id, l.name, l.initials, l.company, l.title, l.email, l.phone, l.status, l.priority, l.score ?? 40, l.source, l.owner, l.ownerInitials, l.lastContact, l.nextFollowup, l.dealValue, l.dealValueNum ?? 0, l.probability ?? 100, l.created, l.industry, l.location, l.website, l.notes || '', l.businessDescription || '', l.companySize || '', l.annualRevenue || '', l.businessModel || '', userId]
-        );
-        insertedCount++;
-      } catch (rowErr) {
-        console.error('Bulk insert row error:', rowErr.message);
+
+        const name = (l.name || l.company || 'New Lead').trim();
+        const company = (l.company || 'Direct Client').trim();
+        const initials = l.initials || name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2) || 'LD';
+        const owner = l.owner || 'Unassigned';
+        const ownerInitials = l.ownerInitials || owner.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
+
+        rows.push([
+          id, name, initials, company, l.title || '', l.email || '', l.phone || '',
+          l.status || 'New', l.priority || 'Medium', Number(l.score) || 40, l.source || 'Excel Import',
+          owner, ownerInitials, l.lastContact || new Date().toISOString(),
+          l.nextFollowup || 'Not scheduled', l.dealValue || '₹0', Number(l.dealValueNum) || 0,
+          Number(l.probability) || 100, l.created || new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
+          l.industry || '', l.location || '', l.website || '', l.notes || '',
+          l.businessDescription || '', l.companySize || '', l.annualRevenue || '', l.businessModel || '',
+          userId
+        ]);
+      }
+
+      if (rows.length > 0) {
+        try {
+          const placeholders = rows.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
+          const values = rows.flat();
+          await db.run(
+            `INSERT INTO leads (id, name, initials, company, title, email, phone, status, priority, score, source, owner, ownerInitials, lastContact, nextFollowup, dealValue, dealValueNum, probability, created, industry, location, website, notes, businessDescription, companySize, annualRevenue, businessModel, userId)
+             VALUES ${placeholders}`,
+            values
+          );
+          insertedCount += rows.length;
+        } catch (chunkErr) {
+          console.warn('Chunk insert failed, falling back to sequential:', chunkErr.message);
+          // Fallback to row-by-row if multi-row insert has a unique constraint or format issue
+          for (const r of rows) {
+            try {
+              await db.run(
+                `INSERT INTO leads (id, name, initials, company, title, email, phone, status, priority, score, source, owner, ownerInitials, lastContact, nextFollowup, dealValue, dealValueNum, probability, created, industry, location, website, notes, businessDescription, companySize, annualRevenue, businessModel, userId)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                r
+              );
+              insertedCount++;
+            } catch (singleErr) {
+              console.error('Row insert error:', singleErr.message);
+            }
+          }
+        }
       }
     }
+
     res.json({ success: true, inserted: insertedCount, total: leads.length });
   } catch (err) {
     res.status(500).json({ error: err.message });

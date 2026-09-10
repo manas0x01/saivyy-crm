@@ -53,10 +53,11 @@ export async function createLead(data) {
 
 // Bulk import — send all leads in a single HTTP request for maximum speed
 export async function bulkCreateLeads(leadsArray) {
+  const payload = Array.isArray(leadsArray) ? leadsArray : (leadsArray?.leads || []);
   return safeFetch('/api/leads/bulk', {
     method: 'POST',
     headers: getHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify(leadsArray),
+    body: JSON.stringify(payload),
   });
 }
 
@@ -281,11 +282,7 @@ export async function resetCrmDatabase() {
 }
 
 export async function createBatchLeads(leads) {
-  return safeFetch('/api/leads/batch', {
-    method: 'POST',
-    headers: getHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ leads }),
-  });
+  return bulkCreateLeads(leads);
 }
 
 export async function convertLead(data) {
