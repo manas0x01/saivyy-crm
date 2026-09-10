@@ -324,7 +324,7 @@ app.get('/api/crm/state', async (req, res) => {
       }
 
       // Leaders see all data across the CRM organization
-      leads = await db.all('SELECT * FROM leads ORDER BY rowid DESC');
+      leads = await db.all("SELECT * FROM leads ORDER BY COALESCE(uploaded_at, lastContact, '') DESC, batch_index ASC");
       deals = await db.all('SELECT * FROM deals ORDER BY rowid DESC');
       customers = await db.all('SELECT * FROM customers ORDER BY rowid DESC');
       companies = await db.all('SELECT * FROM companies ORDER BY rowid DESC');
@@ -341,7 +341,7 @@ app.get('/api/crm/state', async (req, res) => {
       // Members see their records (by userId or matching owner name)
       const memberOwnerPattern = user ? `%${user.name.toLowerCase()}%` : '%';
       leads = await db.all(
-        `SELECT * FROM leads WHERE userId = ? OR LOWER(owner) LIKE ? ORDER BY rowid DESC`,
+        `SELECT * FROM leads WHERE userId = ? OR LOWER(owner) LIKE ? ORDER BY COALESCE(uploaded_at, lastContact, '') DESC, batch_index ASC`,
         [userId, memberOwnerPattern]
       );
       deals = await db.all(
@@ -482,9 +482,12 @@ app.post('/api/leads', async (req, res) => {
     const owner = l.owner || requester?.name || 'Unassigned';
     const ownerInitials = l.ownerInitials || owner.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
 
+    const uploadedAt = l.uploadedAt || new Date().toISOString();
+    const batchIndex = l.batchIndex !== undefined ? Number(l.batchIndex) : 0;
+
     await db.run(
-      `INSERT INTO leads (id, name, initials, company, title, email, phone, status, priority, score, source, owner, ownerInitials, lastContact, nextFollowup, dealValue, dealValueNum, probability, created, industry, location, website, notes, businessDescription, companySize, annualRevenue, businessModel, userId)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO leads (id, name, initials, company, title, email, phone, status, priority, score, source, owner, ownerInitials, lastContact, nextFollowup, dealValue, dealValueNum, probability, created, industry, location, website, notes, businessDescription, companySize, annualRevenue, businessModel, userId, uploaded_at, batch_index)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id, name, initials, company, l.title || '', l.email || '', l.phone || '',
         l.status || 'New', l.priority || 'Medium', Number(l.score) || 40, l.source || 'Manual',
@@ -493,7 +496,7 @@ app.post('/api/leads', async (req, res) => {
         Number(l.probability) || 100, l.created || new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
         l.industry || '', l.location || '', l.website || '', l.notes || '',
         l.businessDescription || '', l.companySize || '', l.annualRevenue || '', l.businessModel || '',
-        userId
+        userId, uploadedAt, batchIndex
       ]
     );
     const newLead = await db.get('SELECT * FROM leads WHERE id = ?', [id]);
@@ -535,17 +538,18 @@ app.post(['/api/leads/bulk', '/api/leads/batch'], async (req, res) => {
       }
     } catch (_) {}
 
-    // Reverse leads so row 1 in Excel ends up on top with ORDER BY rowid DESC
-    const reversedLeads = [...leads].reverse();
+    const uploadTimestamp = new Date().toISOString();
     let insertedCount = 0;
 
-    // Process in chunks of 35 rows for fast multi-row insertion
+    // Process in chunks of 35 rows in original order
     const CHUNK_SIZE = 35;
-    for (let c = 0; c < reversedLeads.length; c += CHUNK_SIZE) {
-      const chunk = reversedLeads.slice(c, c + CHUNK_SIZE);
+    for (let c = 0; c < leads.length; c += CHUNK_SIZE) {
+      const chunk = leads.slice(c, c + CHUNK_SIZE);
       const rows = [];
 
-      for (const l of chunk) {
+      for (let j = 0; j < chunk.length; j++) {
+        const l = chunk[j];
+        const overallIndex = c + j;
         const id = l.id || generateId('L');
         let userId = defaultUserId;
         if (l.assignedUserId && l.assignedUserId !== requesterId && (requesterRole === 'Leader' || requesterRole === 'Admin')) {
@@ -560,6 +564,8 @@ app.post(['/api/leads/bulk', '/api/leads/batch'], async (req, res) => {
         const initials = l.initials || name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2) || 'LD';
         const owner = l.owner || 'Unassigned';
         const ownerInitials = l.ownerInitials || owner.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
+        const uploadedAt = l.uploadedAt || uploadTimestamp;
+        const batchIndex = l.batchIndex !== undefined ? Number(l.batchIndex) : overallIndex;
 
         rows.push([
           id, name, initials, company, l.title || '', l.email || '', l.phone || '',
@@ -569,16 +575,16 @@ app.post(['/api/leads/bulk', '/api/leads/batch'], async (req, res) => {
           Number(l.probability) || 100, l.created || new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
           l.industry || '', l.location || '', l.website || '', l.notes || '',
           l.businessDescription || '', l.companySize || '', l.annualRevenue || '', l.businessModel || '',
-          userId
+          userId, uploadedAt, batchIndex
         ]);
       }
 
       if (rows.length > 0) {
         try {
-          const placeholders = rows.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
+          const placeholders = rows.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
           const values = rows.flat();
           await db.run(
-            `INSERT INTO leads (id, name, initials, company, title, email, phone, status, priority, score, source, owner, ownerInitials, lastContact, nextFollowup, dealValue, dealValueNum, probability, created, industry, location, website, notes, businessDescription, companySize, annualRevenue, businessModel, userId)
+            `INSERT INTO leads (id, name, initials, company, title, email, phone, status, priority, score, source, owner, ownerInitials, lastContact, nextFollowup, dealValue, dealValueNum, probability, created, industry, location, website, notes, businessDescription, companySize, annualRevenue, businessModel, userId, uploaded_at, batch_index)
              VALUES ${placeholders}`,
             values
           );
@@ -589,8 +595,8 @@ app.post(['/api/leads/bulk', '/api/leads/batch'], async (req, res) => {
           for (const r of rows) {
             try {
               await db.run(
-                `INSERT INTO leads (id, name, initials, company, title, email, phone, status, priority, score, source, owner, ownerInitials, lastContact, nextFollowup, dealValue, dealValueNum, probability, created, industry, location, website, notes, businessDescription, companySize, annualRevenue, businessModel, userId)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                `INSERT INTO leads (id, name, initials, company, title, email, phone, status, priority, score, source, owner, ownerInitials, lastContact, nextFollowup, dealValue, dealValueNum, probability, created, industry, location, website, notes, businessDescription, companySize, annualRevenue, businessModel, userId, uploaded_at, batch_index)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 r
               );
               insertedCount++;

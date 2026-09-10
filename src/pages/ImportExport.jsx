@@ -253,8 +253,10 @@ export default function ImportExport() {
     setImporting(true);
     let batchPayloads = [];
     let skipped = 0;
+    const uploadTimestamp = new Date().toISOString();
 
-    for (const row of fileData) {
+    for (let i = 0; i < fileData.length; i++) {
+      const row = fileData[i];
       let name = findRowValue(row, ["name", "fullname", "leadname", "contact", "person", "firstname", "customer", "contactperson", "client", "lead"], 0);
       const company = findRowValue(row, ["company", "companyname", "organization", "org", "business", "firm", "account"], 1) || "Direct Client";
       
@@ -267,7 +269,11 @@ export default function ImportExport() {
         continue;
       }
 
-      const payload = buildLeadPayload(name, company, row, "Excel Import");
+      const payload = {
+        ...buildLeadPayload(name, company, row, "Excel Import"),
+        uploadedAt: uploadTimestamp,
+        batchIndex: batchPayloads.length,
+      };
       batchPayloads.push(payload);
     }
 
@@ -313,6 +319,7 @@ export default function ImportExport() {
     const lines = csvText.trim().split("\n");
     let batchPayloads = [];
     let skipped = 0;
+    const uploadTimestamp = new Date().toISOString();
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
@@ -333,7 +340,11 @@ export default function ImportExport() {
         continue;
       }
       const rowObj = { Name: name, Company: company, Email: parts[2] || "", Phone: parts[3] || "", Status: parts[4] || "" };
-      const payload = buildLeadPayload(name, company, rowObj, "Pasted CSV");
+      const payload = {
+        ...buildLeadPayload(name, company, rowObj, "Pasted CSV"),
+        uploadedAt: uploadTimestamp,
+        batchIndex: batchPayloads.length,
+      };
       batchPayloads.push(payload);
     }
 

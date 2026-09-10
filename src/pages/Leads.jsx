@@ -990,7 +990,18 @@ export default function Leads() {
       const q = query.toLowerCase();
       rows = rows.filter(l => l.name.toLowerCase().includes(q) || l.company.toLowerCase().includes(q) || l.email?.toLowerCase().includes(q) || l.phone?.includes(q));
     }
-    return rows;
+
+    // Keep newly uploaded/created leads first, and within each upload keep rows in ascending row order
+    return [...rows].sort((a, b) => {
+      const timeA = String(a.uploadedAt || a.lastContact || a.created || '');
+      const timeB = String(b.uploadedAt || b.lastContact || b.created || '');
+      if (timeA !== timeB) {
+        return timeB.localeCompare(timeA);
+      }
+      const idxA = a.batchIndex !== undefined ? Number(a.batchIndex) : 0;
+      const idxB = b.batchIndex !== undefined ? Number(b.batchIndex) : 0;
+      return idxA - idxB;
+    });
   }, [state.leads, view, query, statusFilter, priorityFilter, ownerFilter, sourceFilter, employeeFilter, employeeList]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PER_PAGE));
@@ -1090,7 +1101,9 @@ export default function Leads() {
         nextFollowup: "Not scheduled",
         created: new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }),
         notes: "",
-        website: ""
+        website: "",
+        uploadedAt: new Date().toISOString(),
+        batchIndex: 0
       }
     });
     setShowAddModal(false);

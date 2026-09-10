@@ -41,6 +41,8 @@ const PG_COL_CAMEL = {
   accountuserid:       'accountUserId',
   isleader:            'isLeader',
   haslogin:            'hasLogin',
+  uploaded_at:         'uploadedAt',
+  batch_index:         'batchIndex',
 };
 
 function mapRow(row) {
@@ -496,7 +498,9 @@ async function initDb(db) {
       companySize TEXT,
       annualRevenue TEXT,
       businessModel TEXT,
-      userId TEXT
+      userId TEXT,
+      uploaded_at TEXT,
+      batch_index INTEGER DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS deals (
       id TEXT PRIMARY KEY,
@@ -715,6 +719,8 @@ async function initDb(db) {
     if (!colNames.includes('annualrevenue') && !colNames.includes('annualRevenue')) await db.run('ALTER TABLE leads ADD COLUMN annualRevenue TEXT');
     if (!colNames.includes('businessmodel') && !colNames.includes('businessModel')) await db.run('ALTER TABLE leads ADD COLUMN businessModel TEXT');
     if (!colNames.includes('ownerinitials') && !colNames.includes('ownerInitials')) await db.run('ALTER TABLE leads ADD COLUMN ownerInitials TEXT');
+    if (!colNames.includes('uploaded_at') && !colNames.includes('uploadedat')) await db.run('ALTER TABLE leads ADD COLUMN uploaded_at TEXT');
+    if (!colNames.includes('batch_index') && !colNames.includes('batchindex')) await db.run('ALTER TABLE leads ADD COLUMN batch_index INTEGER DEFAULT 0');
   } catch (e) {}
 
   // ── Seed tables from INITIAL_STORE (only when empty) ─────────────────────

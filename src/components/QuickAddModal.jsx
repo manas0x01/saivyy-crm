@@ -55,7 +55,7 @@ function AddLeadForm({ dispatch, teamList, onClose, toast }) {
     const ownerToSave = activeOwner;
     const initials = form.name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
     const ownerInitials = ownerToSave.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
-    dispatch({ type: "ADD_LEAD", payload: { id: createLeadId(), ...form, owner: ownerToSave, initials, ownerInitials, score: 40, probability: 100, dealValueNum: 0, lastContact: "Just now", nextFollowup: "Not scheduled", created: new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }), notes: "", website: "" } });
+    dispatch({ type: "ADD_LEAD", payload: { id: createLeadId(), ...form, owner: ownerToSave, initials, ownerInitials, score: 40, probability: 100, dealValueNum: 0, lastContact: new Date().toISOString(), nextFollowup: "Not scheduled", created: new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }), notes: "", website: "", uploadedAt: new Date().toISOString(), batchIndex: 0 } });
     toast.success(`Lead "${form.name}" added successfully`);
     onClose();
   };
