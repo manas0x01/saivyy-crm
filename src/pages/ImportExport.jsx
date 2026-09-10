@@ -269,6 +269,18 @@ export default function ImportExport() {
         continue;
       }
 
+      // Skip rows with no phone number
+      const rawPhoneCheck = findRowValue(row, [
+        "phone", "phone no", "phone no.", "phone #", "phone number", "phonenumber",
+        "mobile", "mobile no", "mobile no.", "mobile number", "mobilenumber", "mobileno",
+        "telephone", "tel", "tel no", "tel no.", "cell", "cell no", "cell no.", "cellphone",
+        "contactno", "contact no", "contact no.", "contact number", "contactnumber", "contact", "whatsapp",
+      ]);
+      if (!rawPhoneCheck || !rawPhoneCheck.toString().trim()) {
+        skipped++;
+        continue;
+      }
+
       const payload = {
         ...buildLeadPayload(name, company, row, "Excel Import"),
         uploadedAt: uploadTimestamp,
@@ -339,7 +351,13 @@ export default function ImportExport() {
         skipped++;
         continue;
       }
-      const rowObj = { Name: name, Company: company, Email: parts[2] || "", Phone: parts[3] || "", Status: parts[4] || "" };
+      // Skip rows with no phone number
+      const phoneVal = parts[3] || "";
+      if (!phoneVal.trim()) {
+        skipped++;
+        continue;
+      }
+      const rowObj = { Name: name, Company: company, Email: parts[2] || "", Phone: phoneVal, Status: parts[4] || "" };
       const payload = {
         ...buildLeadPayload(name, company, rowObj, "Pasted CSV"),
         uploadedAt: uploadTimestamp,
