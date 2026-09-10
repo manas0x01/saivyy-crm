@@ -57,10 +57,35 @@ function parseMaybeNumber(value) {
   return Number.isNaN(parsed) ? null : parsed;
 }
 
+/**
+ * Extracts a valid Indian 10-digit mobile number (starts with 6-9).
+ * Returns the clean 10-digit string, or null if it's a landline/invalid.
+ */
 function normalizeMobile(rawValue) {
-  if (rawValue === undefined || rawValue === null) return "";
-  const normalized = String(rawValue).trim();
-  return normalized;
+  if (rawValue === undefined || rawValue === null) return null;
+  let p = String(rawValue).trim();
+  if (!p) return null;
+
+  // Strip name/notes after a dash followed by letters (e.g. "9327... - Mr. XYZ")
+  p = p.split(/\s*[-–]\s*[A-Za-z]/)[0].trim();
+
+  // Strip common prefixes like "Mob :", "Mobile:", "Ph:"
+  p = p.replace(/^(mob(?:ile)?|tel(?:ephone)?|phone|ph|contact)[^0-9+]*/i, '').trim();
+
+  // Keep only digits (drop spaces, dashes, dots, parens, +)
+  p = p.replace(/[^\d]/g, '');
+
+  if (!p) return null;
+
+  // Strip country code 91 if present
+  if (p.length === 12 && p.startsWith('91')) p = p.slice(2);
+  // Strip leading 0 (STD trunk prefix)
+  if (p.length === 11 && p.startsWith('0')) p = p.slice(1);
+
+  // Valid Indian mobile: exactly 10 digits, starts with 6, 7, 8, or 9
+  if (/^[6-9]\d{9}$/.test(p)) return p;
+
+  return null; // landline, toll-free, short number, or garbage
 }
 
 function createLeadId() {
@@ -269,14 +294,14 @@ export default function ImportExport() {
         continue;
       }
 
-      // Skip rows with no phone number
-      const rawPhoneCheck = findRowValue(row, [
+      // Skip rows with no valid mobile number (rejects landlines, toll-free, empty)
+      const rawPhoneVal = findRowValue(row, [
         "phone", "phone no", "phone no.", "phone #", "phone number", "phonenumber",
         "mobile", "mobile no", "mobile no.", "mobile number", "mobilenumber", "mobileno",
         "telephone", "tel", "tel no", "tel no.", "cell", "cell no", "cell no.", "cellphone",
         "contactno", "contact no", "contact no.", "contact number", "contactnumber", "contact", "whatsapp",
       ]);
-      if (!rawPhoneCheck || !rawPhoneCheck.toString().trim()) {
+      if (!normalizeMobile(rawPhoneVal)) {
         skipped++;
         continue;
       }
@@ -351,9 +376,9 @@ export default function ImportExport() {
         skipped++;
         continue;
       }
-      // Skip rows with no phone number
+      // Skip rows without a valid Indian mobile number
       const phoneVal = parts[3] || "";
-      if (!phoneVal.trim()) {
+      if (!normalizeMobile(phoneVal)) {
         skipped++;
         continue;
       }
