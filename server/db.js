@@ -669,7 +669,7 @@ async function initDb(db) {
       name TEXT NOT NULL,
       category TEXT,
       status INTEGER DEFAULT 0,
-      desc TEXT,
+      description TEXT,
       apiKey TEXT,
       webhookUrl TEXT,
       config TEXT,
@@ -720,7 +720,7 @@ async function initDb(db) {
 
   // Users
   const userCount = await db.get("SELECT COUNT(*) as count FROM users");
-  if (userCount && userCount.count === 0) {
+  if (userCount && Number(userCount.count) === 0) {
     for (const u of (INITIAL_STORE.users || [])) {
       try {
         await db.run(
@@ -733,12 +733,12 @@ async function initDb(db) {
 
   // Integrations
   const intCount = await db.get("SELECT COUNT(*) as count FROM integrations");
-  if (intCount && intCount.count === 0) {
+  if (intCount && Number(intCount.count) === 0) {
     for (const item of (INITIAL_STORE.integrations || [])) {
       try {
         await db.run(
-          `INSERT INTO integrations (id, name, category, status, desc, apiKey, webhookUrl, config, lastSync, userId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [item.id, item.name, item.category || '', item.status ? 1 : 0, item.desc || '', item.apiKey || '', item.webhookUrl || '', item.config || '{}', item.lastSync || 'Never', item.userId || 'U-117bb402-3724-4580-9da9-01311b759889']
+          `INSERT INTO integrations (id, name, category, status, description, apiKey, webhookUrl, config, lastSync, userId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [item.id, item.name, item.category || '', item.status ? 1 : 0, item.desc || item.description || '', item.apiKey || '', item.webhookUrl || '', item.config || '{}', item.lastSync || 'Never', item.userId || 'U-117bb402-3724-4580-9da9-01311b759889']
         );
       } catch (e) {}
     }
@@ -746,7 +746,7 @@ async function initDb(db) {
 
   // Teams
   const teamCount = await db.get("SELECT COUNT(*) as count FROM teams");
-  if (teamCount && teamCount.count === 0) {
+  if (teamCount && Number(teamCount.count) === 0) {
     for (const t of (INITIAL_STORE.teams || [])) {
       try {
         await db.run(
@@ -759,7 +759,7 @@ async function initDb(db) {
 
   // Team members
   const tmCount = await db.get("SELECT COUNT(*) as count FROM team_members");
-  if (tmCount && tmCount.count === 0) {
+  if (tmCount && Number(tmCount.count) === 0) {
     for (const tm of (INITIAL_STORE.team_members || [])) {
       try {
         await db.run(
@@ -772,7 +772,7 @@ async function initDb(db) {
 
   // Leads
   const leadCount = await db.get("SELECT COUNT(*) as count FROM leads");
-  if (leadCount && leadCount.count === 0) {
+  if (leadCount && Number(leadCount.count) === 0) {
     if (INITIAL_STORE.leads && INITIAL_STORE.leads.length > 0) {
       console.log(`Seeding ${INITIAL_STORE.leads.length} leads from INITIAL_STORE...`);
     }
@@ -788,7 +788,7 @@ async function initDb(db) {
 
   // Calls
   const callCount = await db.get("SELECT COUNT(*) as count FROM calls");
-  if (callCount && callCount.count === 0) {
+  if (callCount && Number(callCount.count) === 0) {
     for (const cl of (INITIAL_STORE.calls || [])) {
       try {
         await db.run(
@@ -801,7 +801,7 @@ async function initDb(db) {
 
   // Activities
   const actCount = await db.get("SELECT COUNT(*) as count FROM activities");
-  if (actCount && actCount.count === 0) {
+  if (actCount && Number(actCount.count) === 0) {
     for (const a of (INITIAL_STORE.activities || [])) {
       try {
         await db.run(

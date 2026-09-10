@@ -1080,9 +1080,9 @@ app.post('/api/integrations', async (req, res) => {
     const userId = req.headers['x-user-id'] || 'U-admin';
     const id = item.id || generateId('INT');
     await db.run(
-      `INSERT INTO integrations (id, name, category, status, desc, apiKey, webhookUrl, config, lastSync, userId)
+      `INSERT INTO integrations (id, name, category, status, description, apiKey, webhookUrl, config, lastSync, userId)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, item.name, item.category || 'Custom', item.status ? 1 : 0, item.desc || '', item.apiKey || '', item.webhookUrl || '', item.config || '{}', 'Just connected', userId]
+      [id, item.name, item.category || 'Custom', item.status ? 1 : 0, item.desc || item.description || '', item.apiKey || '', item.webhookUrl || '', item.config || '{}', 'Just connected', userId]
     );
     const created = await db.get('SELECT * FROM integrations WHERE id = ?', [id]);
     res.json({ ...created, status: Boolean(created.status) });
@@ -1095,10 +1095,10 @@ app.put('/api/integrations/:id', async (req, res) => {
   try {
     const db = await getDb();
     const { id } = req.params;
-    const { name, category, desc, apiKey, webhookUrl, config, status } = req.body;
+    const { name, category, desc, description, apiKey, webhookUrl, config, status } = req.body;
     await db.run(
-      `UPDATE integrations SET name = ?, category = ?, desc = ?, apiKey = ?, webhookUrl = ?, config = ?, status = ?, lastSync = ? WHERE id = ?`,
-      [name, category, desc, apiKey, webhookUrl, typeof config === 'object' ? JSON.stringify(config) : config, status ? 1 : 0, 'Just updated', id]
+      `UPDATE integrations SET name = ?, category = ?, description = ?, apiKey = ?, webhookUrl = ?, config = ?, status = ?, lastSync = ? WHERE id = ?`,
+      [name, category, desc || description || '', apiKey, webhookUrl, typeof config === 'object' ? JSON.stringify(config) : config, status ? 1 : 0, 'Just updated', id]
     );
     const updated = await db.get('SELECT * FROM integrations WHERE id = ?', [id]);
     res.json({ ...updated, status: Boolean(updated.status) });
