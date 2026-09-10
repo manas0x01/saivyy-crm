@@ -324,7 +324,7 @@ app.get('/api/crm/state', async (req, res) => {
       }
 
       // Leaders see all data across the CRM organization
-      leads = await db.all("SELECT * FROM leads ORDER BY COALESCE(uploaded_at, lastContact, '') DESC, batch_index ASC");
+      leads = await db.all("SELECT * FROM leads ORDER BY COALESCE(uploaded_at, created, '') DESC, batch_index ASC, id ASC");
       deals = await db.all('SELECT * FROM deals ORDER BY rowid DESC');
       customers = await db.all('SELECT * FROM customers ORDER BY rowid DESC');
       companies = await db.all('SELECT * FROM companies ORDER BY rowid DESC');
@@ -341,7 +341,7 @@ app.get('/api/crm/state', async (req, res) => {
       // Members see their records (by userId or matching owner name)
       const memberOwnerPattern = user ? `%${user.name.toLowerCase()}%` : '%';
       leads = await db.all(
-        `SELECT * FROM leads WHERE userId = ? OR LOWER(owner) LIKE ? ORDER BY COALESCE(uploaded_at, lastContact, '') DESC, batch_index ASC`,
+        `SELECT * FROM leads WHERE userId = ? OR LOWER(owner) LIKE ? ORDER BY COALESCE(uploaded_at, created, '') DESC, batch_index ASC, id ASC`,
         [userId, memberOwnerPattern]
       );
       deals = await db.all(
@@ -619,10 +619,24 @@ app.put('/api/leads/:id', async (req, res) => {
     const db = await getDb();
     const { id } = req.params;
     const updates = req.body;
-    const keys = Object.keys(updates).filter(k => k !== 'id');
+    const keys = Object.keys(updates).filter(k =>
+      k !== 'id' &&
+      // Never allow overwriting the ordering fields — they are set at import time and must be permanent
+      k !== 'uploaded_at' && k !== 'uploadedAt' &&
+      k !== 'batch_index' && k !== 'batchIndex'
+    );
     if (!keys.length) return res.json({ id });
 
-    const setClause = keys.map(k => `${k} = ?`).join(', ');
+    // Map camelCase keys to DB column names (PostgreSQL uses snake_case columns)
+    const colMap = {
+      lastContact: 'lastcontact', nextFollowup: 'nextfollowup',
+      dealValue: 'dealvalue', dealValueNum: 'dealvaluenum',
+      ownerInitials: 'ownerinitials', businessDescription: 'businessdescription',
+      companySize: 'companysize', annualRevenue: 'annualrevenue',
+      businessModel: 'businessmodel', userId: 'userid',
+    };
+    const dbKeys = keys.map(k => colMap[k] || k);
+    const setClause = dbKeys.map(k => `${k} = ?`).join(', ');
     const values = keys.map(k => updates[k]);
     await db.run(`UPDATE leads SET ${setClause} WHERE id = ?`, [...values, id]);
     const updated = await db.get('SELECT * FROM leads WHERE id = ?', [id]);

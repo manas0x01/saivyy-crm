@@ -991,16 +991,18 @@ export default function Leads() {
       rows = rows.filter(l => l.name.toLowerCase().includes(q) || l.company.toLowerCase().includes(q) || l.email?.toLowerCase().includes(q) || l.phone?.includes(q));
     }
 
-    // Keep newly uploaded/created leads first, and within each upload keep rows in ascending row order
+    // Stable ordering: newest UPLOAD BATCH first, then rows within same batch in upload order.
+    // We NEVER sort by lastContact because that changes every time a lead is updated
+    // (which would scramble the list every time you change a status or add a call note).
     return [...rows].sort((a, b) => {
-      const timeA = String(a.uploadedAt || a.lastContact || a.created || '');
-      const timeB = String(b.uploadedAt || b.lastContact || b.created || '');
+      const timeA = String(a.uploadedAt || a.created || '');
+      const timeB = String(b.uploadedAt || b.created || '');
       if (timeA !== timeB) {
-        return timeB.localeCompare(timeA);
+        return timeB.localeCompare(timeA); // newest upload batch first
       }
       const idxA = a.batchIndex !== undefined ? Number(a.batchIndex) : 0;
       const idxB = b.batchIndex !== undefined ? Number(b.batchIndex) : 0;
-      return idxA - idxB;
+      return idxA - idxB; // within same batch: original row order
     });
   }, [state.leads, view, query, statusFilter, priorityFilter, ownerFilter, sourceFilter, employeeFilter, employeeList]);
 
