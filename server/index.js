@@ -1205,8 +1205,8 @@ app.use((err, req, res, next) => {
 });
 
 if (!process.env.VERCEL) {
-  app.listen(PORT, () => {
-    console.log(`⚡ Saivyy CRM REST API server running at http://localhost:${PORT}`);
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`⚡ Saivyy CRM REST API server running on port ${PORT}`);
   });
 }
 

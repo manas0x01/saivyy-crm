@@ -13,8 +13,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@libsql/client": "^0.18.0",
-    "@rolldown/binding-win32-x64-msvc": "^1.2.3",
     "concurrently": "^10.0.4",
     "cors": "^2.8.6",
     "express": "^5.2.1",
