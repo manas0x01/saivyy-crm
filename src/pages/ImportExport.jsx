@@ -1,6 +1,7 @@
 import React, { useState, useRef, useMemo, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import {
-  Upload, Download, FileSpreadsheet, CheckCircle, FileDown, Database, Users, Crown
+  Upload, Download, FileSpreadsheet, CheckCircle, FileDown, Database, Users, Crown, ArrowRight
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { T } from "../tokens";
@@ -8,6 +9,7 @@ import { useCrm } from "../store/CrmContext";
 import { useAuth } from "../store/AuthContext";
 import { useToast } from "../components/ToastContext";
 import { FormField, Input } from "../components/Modal";
+import { bulkCreateLeads } from "../services/api";
 
 // Case-insensitive flexible key locator
 function findRowValue(row, possibleKeys, fallbackIndex = -1) {
@@ -70,6 +72,7 @@ function createLeadId() {
 }
 
 export default function ImportExport() {
+  const navigate = useNavigate();
   const { state, dispatch } = useCrm();
   const { user, fetchOrgMembers } = useAuth();
   const toast = useToast();
@@ -256,7 +259,7 @@ export default function ImportExport() {
 
     for (const row of fileData) {
       const name = findRowValue(row, ["name", "fullname", "leadname", "contact", "person", "firstname", "customer"], 0);
-      if (!name) continue;
+      if (!name) { skippedNoName++; continue; }
       const company = findRowValue(row, ["company", "companyname", "organization", "org", "business", "firm"], 1) || "Direct Client";
       const payload = buildLeadPayload(name, company, row, "Excel Import");
       if (!payload.phone) {
@@ -595,7 +598,7 @@ export default function ImportExport() {
                     style={{ background: T.accent, color: "#fff", opacity: importing ? 0.7 : 1 }}
                   >
                     <Upload size={14} className={importing ? "animate-spin" : ""} />
-                    {importing ? "Importing…" : `Import ${fileData.length} Leads into SQLite`}
+                    {importing ? `Importing ${fileData.length} leads…` : `Import ${fileData.length} Leads`}
                   </button>
                 </div>
               )}
@@ -627,20 +630,29 @@ export default function ImportExport() {
           )}
 
           {importedCount !== null && (
-            <div className="p-3 rounded-lg flex items-center gap-2 text-[12.5px]" style={{ background: T.positiveSoft, color: T.positive }}>
-              <CheckCircle size={16} />
-              <span>
-                <strong>{importedCount} leads</strong> imported successfully!
-                <span className="ml-1">Assigned to{" "}
-                  <strong>
-                    {assignToUserId === "self"
-                      ? `${user?.name || "Leader"} (you)`
-                      : (assignableMembers.find(e => e.id === assignToUserId || e.userId === assignToUserId || e.rawId === assignToUserId)?.name || "team member")}
-                  </strong>.
+            <div className="p-3.5 rounded-lg flex items-center justify-between gap-3 text-[12.5px]" style={{ background: T.positiveSoft, color: T.positive }}>
+              <div className="flex items-center gap-2">
+                <CheckCircle size={18} className="shrink-0" />
+                <span>
+                  <strong>{importedCount} leads</strong> imported successfully!
+                  <span className="ml-1">Assigned to{" "}
+                    <strong>
+                      {assignToUserId === "self"
+                        ? `${user?.name || "Leader"} (you)`
+                        : (assignableMembers.find(e => e.id === assignToUserId || e.userId === assignToUserId || e.rawId === assignToUserId)?.name || "team member")}
+                    </strong>.
+                  </span>
+                  {importProbability && <span className="ml-1">Probability: <strong>{importProbability}%</strong>.</span>}
+                  {importDealValue && <span className="ml-1">Deal value: <strong>₹{importDealValue}</strong>.</span>}
                 </span>
-                {importProbability && <span className="ml-1">Probability: <strong>{importProbability}%</strong>.</span>}
-                {importDealValue && <span className="ml-1">Deal value: <strong>₹{importDealValue}</strong>.</span>}
-              </span>
+              </div>
+              <button
+                onClick={() => navigate("/leads")}
+                className="crm-focusable px-3 py-1.5 rounded-md text-[12px] font-semibold flex items-center gap-1.5 shrink-0 shadow-sm hover:opacity-95"
+                style={{ background: T.positive, color: "#fff" }}
+              >
+                Go to Leads <ArrowRight size={14} />
+              </button>
             </div>
           )}
         </div>

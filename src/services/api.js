@@ -51,6 +51,16 @@ export async function createLead(data) {
   });
 }
 
+// Bulk import — send all leads in a single HTTP request for maximum speed
+export async function bulkCreateLeads(leadsArray) {
+  return safeFetch('/api/leads/bulk', {
+    method: 'POST',
+    headers: getHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(leadsArray),
+  });
+}
+
+
 export async function updateLead(id, data) {
   return safeFetch(`/api/leads/${id}`, {
     method: 'PUT',
