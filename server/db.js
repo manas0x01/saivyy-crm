@@ -827,5 +827,10 @@ async function initDb(db) {
     } catch (e) {}
   }
 
+  // Remove any empty or missing phone leads
+  try {
+    await db.run("DELETE FROM leads WHERE phone IS NULL OR TRIM(phone) = ''");
+  } catch (e) {}
+
   console.log('✅ Database initialized and seeded');
 }

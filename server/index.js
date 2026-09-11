@@ -564,6 +564,10 @@ app.post(['/api/leads/bulk', '/api/leads/batch'], async (req, res) => {
           }
         }
 
+        const phone = (l.phone || '').trim();
+        // Skip leads with empty or invalid phone numbers
+        if (!phone) continue;
+
         const name = (l.name || l.company || 'New Lead').trim();
         const company = (l.company || 'Direct Client').trim();
         const initials = l.initials || name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2) || 'LD';
@@ -573,7 +577,7 @@ app.post(['/api/leads/bulk', '/api/leads/batch'], async (req, res) => {
         const batchIndex = l.batchIndex !== undefined ? Number(l.batchIndex) : overallIndex;
 
         rows.push([
-          id, name, initials, company, l.title || '', l.email || '', l.phone || '',
+          id, name, initials, company, l.title || '', l.email || '', phone,
           l.status || 'New', l.priority || 'Medium', Number(l.score) || 40, l.source || 'Excel Import',
           owner, ownerInitials, l.lastContact || new Date().toISOString(),
           l.nextFollowup || 'Not scheduled', l.dealValue || '₹0', Number(l.dealValueNum) || 0,

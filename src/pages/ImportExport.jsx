@@ -321,7 +321,7 @@ export default function ImportExport() {
                findRowValue(row, ["phone", "mobile"]);
       }
 
-      // Check if row has any useful identifier
+      // Skip rows with no valid phone number (rejects empty, missing, or invalid contacts)
       const rawPhoneVal = findRowValue(row, [
         "phone", "phone no", "phone no.", "phone #", "phone number", "phonenumber",
         "mobile", "mobile no", "mobile no.", "mobile number", "mobilenumber", "mobileno",
@@ -329,15 +329,15 @@ export default function ImportExport() {
         "telephone", "tel", "tel no", "tel no.", "cell", "cell no", "cell no.", "cellphone",
         "contactno", "contact no", "contact no.", "contact number", "contactnumber", "contact", "whatsapp",
       ]);
-      const rawEmailVal = findRowValue(row, ["email", "emailid", "mail"]);
-
-      if (!name && !rawPhoneVal && !rawEmailVal && (!company || company === "Direct Client")) {
+      const validPhone = normalizeMobile(rawPhoneVal);
+      if (!validPhone) {
         skipped++;
         continue;
       }
 
       const payload = {
         ...buildLeadPayload(name || "New Lead", company, row, "Excel Import"),
+        phone: validPhone,
         uploadedAt: uploadTimestamp,
         batchIndex: batchPayloads.length,
       };
@@ -408,14 +408,15 @@ export default function ImportExport() {
         name = parts[2] || parts[3] || (company !== "Direct Client" ? company : "");
       }
       const phoneVal = parts[3] || "";
-      const emailVal = parts[2] || "";
-      if (!name && !phoneVal && !emailVal) {
+      const validPhone = normalizeMobile(phoneVal);
+      if (!validPhone) {
         skipped++;
         continue;
       }
-      const rowObj = { Name: name, Company: company, Email: emailVal, Phone: phoneVal, Status: parts[4] || "" };
+      const rowObj = { Name: name, Company: company, Email: parts[2] || "", Phone: validPhone, Status: parts[4] || "" };
       const payload = {
         ...buildLeadPayload(name || "New Lead", company, rowObj, "Pasted CSV"),
+        phone: validPhone,
         uploadedAt: uploadTimestamp,
         batchIndex: batchPayloads.length,
       };
