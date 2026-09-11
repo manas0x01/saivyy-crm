@@ -26,7 +26,11 @@ async function safeFetch(url, options = {}) {
       data = JSON.parse(text);
     } catch {
       console.warn(`API returned non-JSON response (${res.status}) from ${url}:`, text);
-      return { success: false, error: res.status >= 500 ? "Server error" : text };
+      return { success: false, error: res.status >= 500 ? `Server error (${res.status})` : (text || `HTTP ${res.status}`) };
+    }
+    // Treat HTTP 4xx/5xx as errors even if the body parses as JSON
+    if (!res.ok && !data?.error) {
+      data = { ...data, success: false, error: data?.message || data?.error || `HTTP ${res.status}` };
     }
     return data;
   } catch (err) {

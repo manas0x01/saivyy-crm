@@ -31,6 +31,9 @@ function findRowValue(row, possibleKeys, fallbackIndex = -1) {
     const clean = k.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
     return possibleKeys.some(p => {
       const pClean = p.toLowerCase().replace(/[^a-z0-9]/g, "");
+      // Only fuzzy match when column name and key are close in length (within 5 chars)
+      // This prevents "business" matching "businessdetails" (a long descriptive column)
+      if (Math.abs(clean.length - pClean.length) > 5) return false;
       return clean.includes(pClean) || pClean.includes(clean);
     });
   });
@@ -63,27 +66,34 @@ function parseMaybeNumber(value) {
  */
 function normalizeMobile(rawValue) {
   if (rawValue === undefined || rawValue === null) return null;
-  let p = String(rawValue).trim();
-  if (!p) return null;
+  const raw = String(rawValue).trim();
+  if (!raw) return null;
 
-  // Strip name/notes after a dash followed by letters (e.g. "9327... - Mr. XYZ")
-  p = p.split(/\s*[-–]\s*[A-Za-z]/)[0].trim();
+  // If the cell has multiple numbers (slash or comma separated), try each one
+  const parts = raw.split(/[,\/]/);
+  for (let part of parts) {
+    let p = part.trim();
+    if (!p) continue;
 
-  // Strip common prefixes like "Mob :", "Mobile:", "Ph:"
-  p = p.replace(/^(mob(?:ile)?|tel(?:ephone)?|phone|ph|contact)[^0-9+]*/i, '').trim();
+    // Strip name/notes after a dash followed by letters (e.g. "9327... - Mr. XYZ")
+    p = p.split(/\s*[-–]\s*[A-Za-z]/)[0].trim();
 
-  // Keep only digits (drop spaces, dashes, dots, parens, +)
-  p = p.replace(/[^\d]/g, '');
+    // Strip common prefixes like "Mob :", "Mobile:", "Ph:"
+    p = p.replace(/^(mob(?:ile)?|tel(?:ephone)?|phone|ph|contact)[^0-9+]*/i, '').trim();
 
-  if (!p) return null;
+    // Keep only digits (drop spaces, dashes, dots, parens, +)
+    p = p.replace(/[^\d]/g, '');
 
-  // Strip country code 91 if present
-  if (p.length === 12 && p.startsWith('91')) p = p.slice(2);
-  // Strip leading 0 (STD trunk prefix)
-  if (p.length === 11 && p.startsWith('0')) p = p.slice(1);
+    if (!p) continue;
 
-  // Valid Indian mobile: exactly 10 digits, starts with 6, 7, 8, or 9
-  if (/^[6-9]\d{9}$/.test(p)) return p;
+    // Strip country code 91 if present
+    if (p.length === 12 && p.startsWith('91')) p = p.slice(2);
+    // Strip leading 0 (STD trunk prefix)
+    if (p.length === 11 && p.startsWith('0')) p = p.slice(1);
+
+    // Valid Indian mobile: exactly 10 digits, starts with 6, 7, 8, or 9
+    if (/^[6-9]\d{9}$/.test(p)) return p;
+  }
 
   return null; // landline, toll-free, short number, or garbage
 }
@@ -211,9 +221,11 @@ export default function ImportExport() {
 
   // Build a lead payload from a row
   const buildLeadPayload = (name, company, row, sourceName) => {
-    const email = findRowValue(row, [
+    const rawEmail = findRowValue(row, [
       "email", "emailid", "emailaddress", "email address", "e-mail", "mail", "contactemail", "primaryemail",
     ]);
+    // Take only the first address if the cell contains multiple (e.g. "a@b.com, c@d.com")
+    const email = rawEmail ? rawEmail.split(/[,;\/]/)[0].trim() : "";
     const rawPhone = findRowValue(row, [
       "phone", "phone no", "phone no.", "phone #", "phone number", "phonenumber",
       "mobile", "mobile no", "mobile no.", "mobile number", "mobilenumber", "mobileno",
@@ -282,12 +294,30 @@ export default function ImportExport() {
 
     for (let i = 0; i < fileData.length; i++) {
       const row = fileData[i];
-      let name = findRowValue(row, ["name", "fullname", "leadname", "contact", "person", "firstname", "customer", "contactperson", "client", "lead"], 0);
-      const company = findRowValue(row, ["company", "companyname", "organization", "org", "business", "firm", "account"], 1) || "Direct Client";
-      
-      // If name is blank, fallback to email, phone, or company
+
+      // --- Name: try Title+FirstName+LastName combo first (IMS/exhibition format) ---
+      const title     = findRowValue(row, ["tital", "title", "salutation", "prefix"]);
+      const firstName = findRowValue(row, ["firstname", "first name", "first"]);
+      const lastName  = findRowValue(row, ["lastname", "last name", "last"]);
+      let name = [title, firstName, lastName].filter(Boolean).join(" ").trim();
+
+      // Fallback: generic name columns
       if (!name) {
-        name = findRowValue(row, ["email", "emailid", "mail"]) || findRowValue(row, ["phone", "mobile"]) || (company !== "Direct Client" ? company : "");
+        name = findRowValue(row, ["name", "fullname", "leadname", "contact", "person", "customer", "contactperson", "client", "lead"], 0);
+      }
+
+      // --- Company: try exhibitor-specific columns first, then generic ---
+      const company = (
+        findRowValue(row, ["name of exhibitor", "exhibitor", "exhibitorname", "nameofexhibitor"]) ||
+        findRowValue(row, ["company", "companyname", "organization", "org", "firm", "account"], 1) ||
+        "Direct Client"
+      );
+
+      // If name still blank, fallback to company, then email/phone
+      if (!name) {
+        name = (company !== "Direct Client" ? company : "") ||
+               findRowValue(row, ["email", "emailid", "mail"]) ||
+               findRowValue(row, ["phone", "mobile"]);
       }
       if (!name) {
         skipped++;
@@ -298,6 +328,7 @@ export default function ImportExport() {
       const rawPhoneVal = findRowValue(row, [
         "phone", "phone no", "phone no.", "phone #", "phone number", "phonenumber",
         "mobile", "mobile no", "mobile no.", "mobile number", "mobilenumber", "mobileno",
+        "mobile 1", "mobile1", "mobile 2", "mobile2",
         "telephone", "tel", "tel no", "tel no.", "cell", "cell no", "cell no.", "cellphone",
         "contactno", "contact no", "contact no.", "contact number", "contactnumber", "contact", "whatsapp",
       ]);
@@ -322,11 +353,16 @@ export default function ImportExport() {
     try {
       // 1. Direct API call to backend /api/leads/bulk (saves permanently to PostgreSQL)
       const res = await bulkCreateLeads(batchPayloads);
-      
-      // 2. Update local state
+
+      // safeFetch never throws — check for API-level errors explicitly
+      if (res?.error || res?.success === false) {
+        throw new Error(res.error || "Server rejected the import request.");
+      }
+
+      // 2. Update local state immediately for instant UI feedback
       dispatch({ type: "BATCH_ADD_LEADS", payload: batchPayloads });
-      
-      // 3. Immediately refresh latest state from database
+
+      // 3. Refresh from DB to confirm persistence
       if (refreshData) {
         await refreshData();
       }
@@ -398,6 +434,12 @@ export default function ImportExport() {
 
     try {
       const res = await bulkCreateLeads(batchPayloads);
+
+      // safeFetch never throws — check for API-level errors explicitly
+      if (res?.error || res?.success === false) {
+        throw new Error(res.error || "Server rejected the import request.");
+      }
+
       dispatch({ type: "BATCH_ADD_LEADS", payload: batchPayloads });
       if (refreshData) {
         await refreshData();
