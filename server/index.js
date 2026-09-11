@@ -12,8 +12,8 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Helper for generating IDs
 function generateId(prefix) {
@@ -523,6 +523,8 @@ app.post(['/api/leads/bulk', '/api/leads/batch'], async (req, res) => {
     let requesterRole = 'Leader';
     let requesterOrgId = 'ORG-saivyy-default';
     let defaultUserId = requesterId;
+    const allowedOrgUserIds = new Set();
+
     try {
       const requester = await db.get('SELECT id, role, orgId FROM users WHERE id = ?', [requesterId]);
       if (requester) {
@@ -536,13 +538,17 @@ app.post(['/api/leads/bulk', '/api/leads/batch'], async (req, res) => {
           requesterOrgId = anyLeader.orgId;
         }
       }
+      if (requesterOrgId) {
+        const orgUsers = await db.all('SELECT id FROM users WHERE orgId = ?', [requesterOrgId]);
+        orgUsers.forEach(u => allowedOrgUserIds.add(u.id));
+      }
     } catch (_) {}
 
     const uploadTimestamp = new Date().toISOString();
     let insertedCount = 0;
 
-    // Process in chunks of 35 rows in original order
-    const CHUNK_SIZE = 35;
+    // Process in chunks of 50 rows in original order
+    const CHUNK_SIZE = 50;
     for (let c = 0; c < leads.length; c += CHUNK_SIZE) {
       const chunk = leads.slice(c, c + CHUNK_SIZE);
       const rows = [];
@@ -553,10 +559,9 @@ app.post(['/api/leads/bulk', '/api/leads/batch'], async (req, res) => {
         const id = l.id || generateId('L');
         let userId = defaultUserId;
         if (l.assignedUserId && l.assignedUserId !== requesterId && (requesterRole === 'Leader' || requesterRole === 'Admin')) {
-          try {
-            const target = await db.get('SELECT id FROM users WHERE id = ? AND orgId = ?', [l.assignedUserId, requesterOrgId]);
-            if (target) userId = l.assignedUserId;
-          } catch (_) {}
+          if (allowedOrgUserIds.has(l.assignedUserId)) {
+            userId = l.assignedUserId;
+          }
         }
 
         const name = (l.name || l.company || 'New Lead').trim();

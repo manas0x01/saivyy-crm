@@ -994,11 +994,24 @@ export default function Leads() {
     // Stable ordering: newest UPLOAD BATCH first, then rows within same batch in upload order.
     // We NEVER sort by lastContact because that changes every time a lead is updated
     // (which would scramble the list every time you change a status or add a call note).
+    const getTimestamp = (lead) => {
+      if (!lead) return 0;
+      if (lead.uploadedAt) {
+        const t = new Date(lead.uploadedAt).getTime();
+        if (!isNaN(t)) return t;
+      }
+      if (lead.created) {
+        const t = new Date(lead.created).getTime();
+        if (!isNaN(t)) return t;
+      }
+      return 0;
+    };
+
     return [...rows].sort((a, b) => {
-      const timeA = String(a.uploadedAt || a.created || '');
-      const timeB = String(b.uploadedAt || b.created || '');
+      const timeA = getTimestamp(a);
+      const timeB = getTimestamp(b);
       if (timeA !== timeB) {
-        return timeB.localeCompare(timeA); // newest upload batch first
+        return timeB - timeA; // newest upload batch first
       }
       const idxA = a.batchIndex !== undefined ? Number(a.batchIndex) : 0;
       const idxB = b.batchIndex !== undefined ? Number(b.batchIndex) : 0;

@@ -229,11 +229,12 @@ export default function ImportExport() {
     const rawPhone = findRowValue(row, [
       "phone", "phone no", "phone no.", "phone #", "phone number", "phonenumber",
       "mobile", "mobile no", "mobile no.", "mobile number", "mobilenumber", "mobileno",
+      "mobile 1", "mobile1", "mobile 2", "mobile2",
       "telephone", "tel", "tel no", "tel no.", "cell", "cell no", "cell no.", "cellphone",
       "contactno", "contact no", "contact no.", "contact number", "contactnumber", "contact", "whatsapp",
     ]);
-    const phone = normalizeMobile(rawPhone);
-    const title = findRowValue(row, ["title", "jobtitle", "designation", "role", "position"]);
+    const phone = normalizeMobile(rawPhone) || rawPhone || "";
+    const title = findRowValue(row, ["tital", "title", "jobtitle", "designation", "role", "position"]);
     const status = findRowValue(row, ["status", "stage", "leadstatus"]) || "New";
     const priority = findRowValue(row, ["priority", "leadpriority"]) || "Medium";
     const source = findRowValue(row, ["source", "leadsource", "channel"]) || sourceName;
@@ -319,12 +320,8 @@ export default function ImportExport() {
                findRowValue(row, ["email", "emailid", "mail"]) ||
                findRowValue(row, ["phone", "mobile"]);
       }
-      if (!name) {
-        skipped++;
-        continue;
-      }
 
-      // Skip rows with no valid mobile number (rejects landlines, toll-free, empty)
+      // Check if row has any useful identifier
       const rawPhoneVal = findRowValue(row, [
         "phone", "phone no", "phone no.", "phone #", "phone number", "phonenumber",
         "mobile", "mobile no", "mobile no.", "mobile number", "mobilenumber", "mobileno",
@@ -332,13 +329,15 @@ export default function ImportExport() {
         "telephone", "tel", "tel no", "tel no.", "cell", "cell no", "cell no.", "cellphone",
         "contactno", "contact no", "contact no.", "contact number", "contactnumber", "contact", "whatsapp",
       ]);
-      if (!normalizeMobile(rawPhoneVal)) {
+      const rawEmailVal = findRowValue(row, ["email", "emailid", "mail"]);
+
+      if (!name && !rawPhoneVal && !rawEmailVal && (!company || company === "Direct Client")) {
         skipped++;
         continue;
       }
 
       const payload = {
-        ...buildLeadPayload(name, company, row, "Excel Import"),
+        ...buildLeadPayload(name || "New Lead", company, row, "Excel Import"),
         uploadedAt: uploadTimestamp,
         batchIndex: batchPayloads.length,
       };
@@ -351,27 +350,27 @@ export default function ImportExport() {
     }
 
     try {
-      // 1. Direct API call to backend /api/leads/bulk (saves permanently to PostgreSQL)
-      const res = await bulkCreateLeads(batchPayloads);
-
-      // safeFetch never throws — check for API-level errors explicitly
-      if (res?.error || res?.success === false) {
-        throw new Error(res.error || "Server rejected the import request.");
+      // Chunk bulk requests in batches of 50 to stay well within Vercel serverless limits
+      const CHUNK_SIZE = 50;
+      let totalInserted = 0;
+      for (let c = 0; c < batchPayloads.length; c += CHUNK_SIZE) {
+        const chunk = batchPayloads.slice(c, c + CHUNK_SIZE);
+        const res = await bulkCreateLeads(chunk);
+        if (res?.error || res?.success === false) {
+          throw new Error(res.error || `Server failed while importing batch ${Math.floor(c / CHUNK_SIZE) + 1}.`);
+        }
+        totalInserted += res?.inserted ?? chunk.length;
       }
 
-      // 2. Update local state immediately for instant UI feedback
-      dispatch({ type: "BATCH_ADD_LEADS", payload: batchPayloads });
-
-      // 3. Refresh from DB to confirm persistence
+      // Refresh from DB so the entire app and Leads view is fully synchronized
       if (refreshData) {
         await refreshData();
       }
 
-      const count = res?.inserted ?? batchPayloads.length;
-      setImportedCount(count);
+      setImportedCount(totalInserted);
       setFileData(null);
       setFileName("");
-      toast.success(`Successfully imported ${count} leads into the CRM!`, "Import Complete");
+      toast.success(`Successfully imported ${totalInserted} leads into the CRM!`, "Import Complete");
 
       // Redirect to Leads page so the user can immediately see the new leads
       setTimeout(() => {
@@ -408,19 +407,15 @@ export default function ImportExport() {
       if (!name) {
         name = parts[2] || parts[3] || (company !== "Direct Client" ? company : "");
       }
-      if (!name) {
-        skipped++;
-        continue;
-      }
-      // Skip rows without a valid Indian mobile number
       const phoneVal = parts[3] || "";
-      if (!normalizeMobile(phoneVal)) {
+      const emailVal = parts[2] || "";
+      if (!name && !phoneVal && !emailVal) {
         skipped++;
         continue;
       }
-      const rowObj = { Name: name, Company: company, Email: parts[2] || "", Phone: phoneVal, Status: parts[4] || "" };
+      const rowObj = { Name: name, Company: company, Email: emailVal, Phone: phoneVal, Status: parts[4] || "" };
       const payload = {
-        ...buildLeadPayload(name, company, rowObj, "Pasted CSV"),
+        ...buildLeadPayload(name || "New Lead", company, rowObj, "Pasted CSV"),
         uploadedAt: uploadTimestamp,
         batchIndex: batchPayloads.length,
       };
@@ -433,21 +428,23 @@ export default function ImportExport() {
     }
 
     try {
-      const res = await bulkCreateLeads(batchPayloads);
-
-      // safeFetch never throws — check for API-level errors explicitly
-      if (res?.error || res?.success === false) {
-        throw new Error(res.error || "Server rejected the import request.");
+      const CHUNK_SIZE = 50;
+      let totalInserted = 0;
+      for (let c = 0; c < batchPayloads.length; c += CHUNK_SIZE) {
+        const chunk = batchPayloads.slice(c, c + CHUNK_SIZE);
+        const res = await bulkCreateLeads(chunk);
+        if (res?.error || res?.success === false) {
+          throw new Error(res.error || `Server rejected pasted batch ${Math.floor(c / CHUNK_SIZE) + 1}.`);
+        }
+        totalInserted += res?.inserted ?? chunk.length;
       }
 
-      dispatch({ type: "BATCH_ADD_LEADS", payload: batchPayloads });
       if (refreshData) {
         await refreshData();
       }
-      const count = res?.inserted ?? batchPayloads.length;
-      setImportedCount(count);
+      setImportedCount(totalInserted);
       setCsvText("");
-      toast.success(`Successfully imported ${count} leads into the CRM!`, "Import Complete");
+      toast.success(`Successfully imported ${totalInserted} leads into the CRM!`, "Import Complete");
       setTimeout(() => {
         navigate("/leads");
       }, 700);
