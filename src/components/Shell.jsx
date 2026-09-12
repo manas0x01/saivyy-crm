@@ -5,7 +5,7 @@ import {
   Phone, CalendarDays, CheckSquare, Sparkles, BarChart3, UsersRound,
   Upload, Settings, HelpCircle, Bell, Plus, ChevronDown, Command,
   PanelLeftClose, PanelLeft, Search, X, CheckCheck, LogOut, Crown, ArrowLeftCircle,
-  Menu, ChevronRight
+  Menu, ChevronRight, Share2
 } from "lucide-react";
 import { T } from "../tokens";
 import { useCrm } from "../store/CrmContext";
@@ -16,6 +16,7 @@ import GlobalSearch from "./GlobalSearch";
 const NAV_ITEMS = [
   { key: "dashboard", label: "My Dashboard", icon: LayoutDashboard, path: "/my-dashboard" },
   { key: "leads", label: "Leads", icon: Users, path: "/leads", badge: "leads" },
+  { key: "social-leads", label: "Social Leads", icon: Share2, path: "/social-leads", badge: "social" },
   { key: "customers", label: "Customers", icon: UserSquare2, path: "/customers" },
   { key: "companies", label: "Companies", icon: Building2, path: "/companies" },
   { key: "deals", label: "Deals", icon: Briefcase, path: "/deals" },
@@ -59,10 +60,12 @@ export default function Shell({ children }) {
   const unreadCount = state.notifications.filter(n => !n.read).length || 6;
   const overdueTasks = state.tasks.filter(t => !t.completed && (t.dueDate === "Today" || t.dueDate === "Overdue")).length;
   const newLeads = state.leads.filter(l => l.status === "New").length;
+  const newSocialInquiries = (state.socialInquiries || []).filter(si => si.status === "New").length;
 
   const getBadge = (badge) => {
     if (badge === "leads") return newLeads > 0 ? newLeads : null;
     if (badge === "tasks") return overdueTasks > 0 ? overdueTasks : null;
+    if (badge === "social") return newSocialInquiries > 0 ? newSocialInquiries : null;
     return null;
   };
 

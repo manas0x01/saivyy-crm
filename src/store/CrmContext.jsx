@@ -19,6 +19,8 @@ const emptyState = {
   campaigns: [],
   notifications: [],
   integrations: [],
+  socialAccounts: [],
+  socialInquiries: [],
   loading: true,
   error: null,
 };
@@ -143,6 +145,38 @@ function reducer(state, action) {
       return { ...state, integrations: state.integrations.map(i => i.id === action.payload ? { ...i, status: !i.status, lastSync: !i.status ? "Just connected" : "Disconnected" } : i) };
     case "DELETE_INTEGRATION":
       return { ...state, integrations: state.integrations.filter(i => i.id !== action.payload) };
+
+    // --- SOCIAL MEDIA ---
+    case "SET_SOCIAL_ACCOUNTS":
+      return { ...state, socialAccounts: action.payload };
+    case "SET_SOCIAL_INQUIRIES":
+      return { ...state, socialInquiries: action.payload };
+    case "ADD_SOCIAL_INQUIRY":
+      return { ...state, socialInquiries: [action.payload, ...state.socialInquiries] };
+    case "UPDATE_SOCIAL_INQUIRY":
+      return { ...state, socialInquiries: state.socialInquiries.map(si => si.id === action.payload.id ? { ...si, ...action.payload } : si) };
+    case "TOGGLE_SOCIAL_ACCOUNT":
+      return { ...state, socialAccounts: state.socialAccounts.map(sa => sa.id === action.payload.id ? { ...sa, ...action.payload } : sa) };
+    case "ADD_SOCIAL_ACCOUNT":
+      return { ...state, socialAccounts: [...state.socialAccounts, action.payload] };
+    case "EXTRACT_SOCIAL_LEAD":
+      return {
+        ...state,
+        leads: [action.payload.lead, ...state.leads],
+        socialInquiries: state.socialInquiries.map(si => si.id === action.payload.inquiryId
+          ? { ...si, status: 'Extracted', leadId: action.payload.lead.id }
+          : si
+        ),
+      };
+    case "BATCH_EXTRACT_SOCIAL_LEADS":
+      return {
+        ...state,
+        leads: [...action.payload.leads, ...state.leads],
+        socialInquiries: state.socialInquiries.map(si => {
+          const extracted = action.payload.inquiries.find(i => i.id === si.id);
+          return extracted ? { ...si, status: 'Extracted', leadId: extracted.leadId } : si;
+        }),
+      };
 
     // --- NOTIFICATIONS ---
     case "MARK_NOTIFICATION_READ":

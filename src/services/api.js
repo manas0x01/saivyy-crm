@@ -351,3 +351,64 @@ export async function saveSettings(data) {
   });
 }
 
+// ── Social Media Lead Extractor ──────────────────────────────────────────────
+
+export async function fetchSocialAccounts() {
+  return safeFetch('/api/social/accounts', { headers: getHeaders() });
+}
+
+export async function toggleSocialAccount(id) {
+  return safeFetch(`/api/social/accounts/${id}/toggle`, {
+    method: 'PUT',
+    headers: getHeaders(),
+  });
+}
+
+export async function connectSocialAccount(data) {
+  return safeFetch('/api/social/accounts/connect', {
+    method: 'POST',
+    headers: getHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(data),
+  });
+}
+
+export async function fetchSocialInquiries(params = {}) {
+  const qs = new URLSearchParams(params).toString();
+  return safeFetch(`/api/social/inquiries${qs ? '?' + qs : ''}`, { headers: getHeaders() });
+}
+
+export async function extractSocialLead(id) {
+  return safeFetch(`/api/social/inquiries/${id}/extract`, {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+}
+
+export async function bulkExtractSocialLeads() {
+  return safeFetch('/api/social/inquiries/bulk-extract', {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+}
+
+export async function replySocialInquiry(id, replyText) {
+  return safeFetch(`/api/social/inquiries/${id}/reply`, {
+    method: 'POST',
+    headers: getHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ replyText }),
+  });
+}
+
+export async function simulateSocialInquiry() {
+  return safeFetch('/api/social/simulate', {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+}
+
+export async function syncSocialChannels() {
+  return safeFetch('/api/social/sync', {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+}

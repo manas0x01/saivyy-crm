@@ -10,6 +10,7 @@ import AdminRegister from "./pages/AdminRegister";
 import Dashboard from "./pages/Dashboard";
 import LeaderDashboard from "./pages/LeaderDashboard";
 import Leads from "./pages/Leads";
+import SocialLeads from "./pages/SocialLeads";
 import Customers from "./pages/Customers";
 import Companies from "./pages/Companies";
 import Deals from "./pages/Deals";
@@ -51,6 +52,7 @@ function ProtectedApp() {
           <Route path="/my-dashboard" element={<Dashboard />} />
           <Route path="/leader" element={<LeaderDashboard />} />
           <Route path="/leads" element={<Leads />} />
+          <Route path="/social-leads" element={<SocialLeads />} />
           <Route path="/customers" element={<Customers />} />
           <Route path="/companies" element={<Companies />} />
           <Route path="/deals" element={<Deals />} />

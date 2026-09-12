@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { INITIAL_STORE } from './initialStore.js';
+import { INITIAL_SOCIAL_ACCOUNTS, INITIAL_SOCIAL_INQUIRIES } from './socialInitialData.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -43,6 +44,18 @@ const PG_COL_CAMEL = {
   haslogin:            'hasLogin',
   uploaded_at:         'uploadedAt',
   batch_index:         'batchIndex',
+  accounttype:         'accountType',
+  trackedkeywords:     'trackedKeywords',
+  sendername:          'senderName',
+  senderhandle:        'senderHandle',
+  sendertitle:         'sendertitle',
+  sendercompany:       'senderCompany',
+  querytype:           'queryType',
+  querytext:           'queryText',
+  intentscore:         'intentScore',
+  extracteddata:       'extractedData',
+  leadid:              'leadId',
+  replytext:           'replyText',
 };
 
 function mapRow(row) {
@@ -270,9 +283,13 @@ function createMemoryFallbackDb() {
     store = JSON.parse(JSON.stringify(INITIAL_STORE || {}));
   }
 
-  const tables = ['users', 'leads', 'deals', 'customers', 'companies', 'teams', 'team_members', 'tasks', 'calls', 'meetings', 'activities', 'automations', 'campaigns', 'notifications', 'integrations'];
+  const tables = ['users', 'leads', 'deals', 'customers', 'companies', 'teams', 'team_members', 'tasks', 'calls', 'meetings', 'activities', 'automations', 'campaigns', 'notifications', 'integrations', 'social_accounts', 'social_inquiries'];
   for (const t of tables) {
-    if (!store[t]) store[t] = [];
+    if (!store[t]) {
+      if (t === 'social_accounts') store[t] = JSON.parse(JSON.stringify(INITIAL_SOCIAL_ACCOUNTS));
+      else if (t === 'social_inquiries') store[t] = JSON.parse(JSON.stringify(INITIAL_SOCIAL_INQUIRIES));
+      else store[t] = [];
+    }
   }
 
   function saveStore() {
@@ -681,6 +698,39 @@ async function initDb(db) {
       lastSync TEXT,
       userId TEXT
     );
+    CREATE TABLE IF NOT EXISTS social_accounts (
+      id TEXT PRIMARY KEY,
+      platform TEXT NOT NULL,
+      name TEXT NOT NULL,
+      handle TEXT,
+      accountType TEXT,
+      status INTEGER DEFAULT 1,
+      followers TEXT,
+      lastSync TEXT,
+      icon TEXT,
+      color TEXT,
+      metrics TEXT,
+      trackedKeywords TEXT,
+      userId TEXT
+    );
+    CREATE TABLE IF NOT EXISTS social_inquiries (
+      id TEXT PRIMARY KEY,
+      platform TEXT NOT NULL,
+      senderName TEXT NOT NULL,
+      senderHandle TEXT,
+      senderTitle TEXT,
+      senderCompany TEXT,
+      queryType TEXT,
+      queryText TEXT NOT NULL,
+      intent TEXT DEFAULT 'High Intent',
+      intentScore INTEGER DEFAULT 90,
+      extractedData TEXT,
+      status TEXT DEFAULT 'New',
+      leadId TEXT,
+      timestamp TEXT,
+      replyText TEXT,
+      userId TEXT
+    );
   `);
 
   // ── Column migrations (add if missing) ────────────────────────────────────
@@ -819,18 +869,36 @@ async function initDb(db) {
     }
   }
 
-  // Fix any rows with NULL or legacy userId
-  const fixTables = ['leads', 'deals', 'customers', 'companies', 'teams', 'team_members', 'tasks', 'calls', 'meetings', 'activities', 'automations', 'campaigns', 'notifications', 'integrations'];
-  for (const table of fixTables) {
-    try {
-      await db.run(`UPDATE ${table} SET userId = 'U-117bb402-3724-4580-9da9-01311b759889' WHERE userId IS NULL OR userId = 'U-admin'`);
-    } catch (e) {}
-  }
-
-  // Remove any empty or missing phone leads
+  // Social Accounts & Inquiries Seeding
   try {
-    await db.run("DELETE FROM leads WHERE phone IS NULL OR TRIM(phone) = ''");
-  } catch (e) {}
+    const saCount = await db.get("SELECT COUNT(*) as count FROM social_accounts");
+    if (saCount && Number(saCount.count) === 0) {
+      for (const sa of INITIAL_SOCIAL_ACCOUNTS) {
+        try {
+          await db.run(
+            `INSERT INTO social_accounts (id, platform, name, handle, accountType, status, followers, lastSync, icon, color, metrics, trackedKeywords, userId)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [sa.id, sa.platform, sa.name, sa.handle, sa.accountType, sa.status, sa.followers, sa.lastSync, sa.icon, sa.color, sa.metrics, sa.trackedKeywords, sa.userId]
+          );
+        } catch(e) {}
+      }
+    }
+  } catch(e) {}
+
+  try {
+    const siCount = await db.get("SELECT COUNT(*) as count FROM social_inquiries");
+    if (siCount && Number(siCount.count) === 0) {
+      for (const si of INITIAL_SOCIAL_INQUIRIES) {
+        try {
+          await db.run(
+            `INSERT INTO social_inquiries (id, platform, senderName, senderHandle, senderTitle, senderCompany, queryType, queryText, intent, intentScore, extractedData, status, leadId, timestamp, replyText, userId)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [si.id, si.platform, si.senderName, si.senderHandle, si.senderTitle, si.senderCompany, si.queryType, si.queryText, si.intent, si.intentScore, si.extractedData, si.status, si.leadId, si.timestamp, si.replyText, si.userId]
+          );
+        } catch(e) {}
+      }
+    }
+  } catch(e) {}
 
   console.log('✅ Database initialized and seeded');
 }

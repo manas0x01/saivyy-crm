@@ -376,9 +376,13 @@ app.get('/api/crm/state', async (req, res) => {
       campaigns = await db.all(`SELECT * FROM campaigns WHERE userId = ? ORDER BY rowid DESC`, [userId]);
       notifications = await db.all(`SELECT * FROM notifications WHERE userId = ? ORDER BY rowid DESC`, [userId]);
       integrations = await db.all(`SELECT * FROM integrations WHERE userId = ? ORDER BY rowid DESC`, [userId]);
-      teams = await db.all(`SELECT * FROM teams ORDER BY rowid DESC`);
+      teams = await db.all('SELECT * FROM teams ORDER BY rowid DESC');
     }
-    
+
+    // Social Media Lead Extractor data (shared across all users for demo)
+    let socialAccounts = await db.all('SELECT * FROM social_accounts ORDER BY rowid ASC');
+    let socialInquiries = await db.all('SELECT * FROM social_inquiries ORDER BY rowid DESC');
+
     let teamMembers;
     if (user && user.role === 'Leader') {
       const orgMembers = await db.all('SELECT id FROM users WHERE orgId = ?', [user.orgId]);
@@ -427,6 +431,16 @@ app.get('/api/crm/state', async (req, res) => {
     const parsedMeetings = meetings.map(m => ({ ...m, attendees: JSON.parse(m.attendees || '[]') }));
     const parsedNotifs = notifications.map(n => ({ ...n, read: Boolean(n.read) }));
     const parsedIntegrations = integrations.map(i => ({ ...i, status: Boolean(i.status) }));
+    const parsedSocialAccounts = (socialAccounts || []).map(sa => ({
+      ...sa,
+      status: Boolean(sa.status),
+      metrics: typeof sa.metrics === 'string' ? JSON.parse(sa.metrics || '{}') : sa.metrics || {},
+      trackedKeywords: typeof sa.trackedKeywords === 'string' ? JSON.parse(sa.trackedKeywords || '[]') : sa.trackedKeywords || [],
+    }));
+    const parsedSocialInquiries = (socialInquiries || []).map(si => ({
+      ...si,
+      extractedData: typeof si.extractedData === 'string' ? JSON.parse(si.extractedData || '{}') : si.extractedData || {},
+    }));
 
     res.json({
       leads,
@@ -444,6 +458,8 @@ app.get('/api/crm/state', async (req, res) => {
       campaigns,
       notifications: parsedNotifs,
       integrations: parsedIntegrations,
+      socialAccounts: parsedSocialAccounts,
+      socialInquiries: parsedSocialInquiries,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1277,6 +1293,428 @@ app.delete('/api/integrations/:id', async (req, res) => {
     const db = await getDb();
     await db.run('DELETE FROM integrations WHERE id = ?', [req.params.id]);
     res.json({ success: true, id: req.params.id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------- SOCIAL MEDIA LEAD EXTRACTOR API ----------------
+
+// Fetch all connected social accounts
+app.get('/api/social/accounts', async (req, res) => {
+  try {
+    const db = await getDb();
+    const rows = await db.all('SELECT * FROM social_accounts ORDER BY rowid ASC');
+    const accounts = (rows || []).map(sa => ({
+      ...sa,
+      status: Boolean(sa.status),
+      metrics: typeof sa.metrics === 'string' ? JSON.parse(sa.metrics || '{}') : sa.metrics || {},
+      trackedKeywords: typeof sa.trackedKeywords === 'string' ? JSON.parse(sa.trackedKeywords || '[]') : sa.trackedKeywords || [],
+    }));
+    res.json({ success: true, accounts });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Toggle social account connection status
+app.put('/api/social/accounts/:id/toggle', async (req, res) => {
+  try {
+    const db = await getDb();
+    const { id } = req.params;
+    const account = await db.get('SELECT * FROM social_accounts WHERE id = ?', [id]);
+    if (!account) return res.status(404).json({ error: 'Social account not found' });
+
+    const newStatus = account.status ? 0 : 1;
+    const newLastSync = newStatus ? 'Just connected' : 'Disconnected';
+    await db.run('UPDATE social_accounts SET status = ?, lastSync = ? WHERE id = ?', [newStatus, newLastSync, id]);
+
+    const updated = await db.get('SELECT * FROM social_accounts WHERE id = ?', [id]);
+    res.json({
+      success: true,
+      account: {
+        ...updated,
+        status: Boolean(updated.status),
+        metrics: typeof updated.metrics === 'string' ? JSON.parse(updated.metrics || '{}') : updated.metrics || {},
+        trackedKeywords: typeof updated.trackedKeywords === 'string' ? JSON.parse(updated.trackedKeywords || '[]') : updated.trackedKeywords || [],
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Connect or configure social account
+app.post('/api/social/accounts/connect', async (req, res) => {
+  try {
+    const db = await getDb();
+    const { platform, name, handle, accountType, trackedKeywords } = req.body;
+    const userId = req.headers['x-user-id'] || 'U-admin';
+    const id = generateId('SA');
+
+    const platformIcons = {
+      Meta: 'meta',
+      Instagram: 'instagram',
+      LinkedIn: 'linkedin',
+      X: 'x',
+      WhatsApp: 'whatsapp',
+      YouTube: 'youtube'
+    };
+    const platformColors = {
+      Meta: '#1877F2',
+      Instagram: '#E4405F',
+      LinkedIn: '#0A66C2',
+      X: '#0F1419',
+      WhatsApp: '#25D366',
+      YouTube: '#FF0000'
+    };
+
+    const icon = platformIcons[platform] || 'share';
+    const color = platformColors[platform] || '#BC5A1B';
+    const metrics = JSON.stringify({ inquiries: 0, extracted: 0, yield: '0%' });
+    const keywordsStr = JSON.stringify(Array.isArray(trackedKeywords) ? trackedKeywords : ['lead', 'inquiry', 'crm']);
+
+    await db.run(
+      `INSERT INTO social_accounts (id, platform, name, handle, accountType, status, followers, lastSync, icon, color, metrics, trackedKeywords, userId)
+       VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, platform, name || `${platform} Business`, handle || `@${platform.toLowerCase()}_account`, accountType || 'Professional Account', 'Active Channel', 'Just connected', icon, color, metrics, keywordsStr, userId]
+    );
+
+    const created = await db.get('SELECT * FROM social_accounts WHERE id = ?', [id]);
+    res.json({
+      success: true,
+      account: {
+        ...created,
+        status: Boolean(created.status),
+        metrics: JSON.parse(created.metrics || '{}'),
+        trackedKeywords: JSON.parse(created.trackedKeywords || '[]')
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get social inquiries
+app.get('/api/social/inquiries', async (req, res) => {
+  try {
+    const db = await getDb();
+    const { platform, status, intent } = req.query;
+    let sql = 'SELECT * FROM social_inquiries WHERE 1=1';
+    const params = [];
+
+    if (platform && platform !== 'All') {
+      sql += ' AND LOWER(platform) = LOWER(?)';
+      params.push(platform);
+    }
+    if (status && status !== 'All') {
+      sql += ' AND LOWER(status) = LOWER(?)';
+      params.push(status);
+    }
+    if (intent && intent !== 'All') {
+      sql += ' AND LOWER(intent) LIKE LOWER(?)';
+      params.push(`%${intent}%`);
+    }
+    sql += ' ORDER BY rowid DESC';
+
+    const rows = await db.all(sql, params);
+    const inquiries = (rows || []).map(si => ({
+      ...si,
+      extractedData: typeof si.extractedData === 'string' ? JSON.parse(si.extractedData || '{}') : si.extractedData || {},
+    }));
+    res.json({ success: true, inquiries });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Extract social inquiry as a CRM Lead
+app.post('/api/social/inquiries/:id/extract', async (req, res) => {
+  try {
+    const db = await getDb();
+    const { id } = req.params;
+    let requesterId = req.headers['x-user-id'] || 'U-admin';
+
+    const inquiry = await db.get('SELECT * FROM social_inquiries WHERE id = ?', [id]);
+    if (!inquiry) return res.status(404).json({ error: 'Inquiry not found' });
+
+    const user = await db.get('SELECT * FROM users WHERE id = ?', [requesterId]);
+    const userId = user ? user.id : 'U-117bb402-3724-4580-9da9-01311b759889';
+
+    const ext = typeof inquiry.extractedData === 'string' ? JSON.parse(inquiry.extractedData || '{}') : (inquiry.extractedData || {});
+    
+    // Create new Lead
+    const leadId = generateId('L');
+    const leadName = inquiry.senderName || 'Social Prospect';
+    const leadInitials = leadName.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2) || 'SL';
+    const company = ext.company || inquiry.senderCompany || `${inquiry.senderName} (Social Inbound)`;
+    const title = inquiry.senderTitle || '';
+    const email = ext.email || '';
+    const phone = ext.phone || '+91 98000 00000';
+    const source = `${inquiry.platform} Lead Extractor`;
+    const owner = user?.name || 'Sales Team';
+    const ownerInitials = user?.name ? user.name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2) : 'ST';
+    const dealValue = ext.budget || '₹3,50,000';
+    const dealValueNum = parseInt(dealValue.replace(/[^0-9]/g, '')) || 350000;
+    const nowIso = new Date().toISOString();
+    const todayFormatted = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    const notes = `[Social Lead from ${inquiry.platform} (${inquiry.queryType})]\nHandle: ${inquiry.senderHandle}\nQuery: "${inquiry.queryText}"\nEstimated Budget: ${dealValue}\nTeam Size: ${ext.teamSize || 'N/A'}\nRequirement: ${ext.service || 'CRM Inbound'}`;
+
+    await db.run(
+      `INSERT INTO leads (id, name, initials, company, title, email, phone, status, priority, score, source, owner, ownerInitials, lastContact, nextFollowup, dealValue, dealValueNum, probability, created, industry, location, website, notes, businessDescription, companySize, annualRevenue, businessModel, userId, uploaded_at, batch_index)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'New', 'High', ?, ?, ?, ?, ?, 'Follow up scheduled', ?, ?, 65, ?, ?, 'India', '', ?, '', ?, ?, '', ?, ?, 0)`,
+      [
+        leadId, leadName, leadInitials, company, title, email, phone,
+        inquiry.intentScore || 95, source, owner, ownerInitials, nowIso,
+        dealValue, dealValueNum, todayFormatted,
+        ext.industry || '', notes, ext.teamSize || '', dealValue, userId, nowIso
+      ]
+    );
+
+    // Update social inquiry status
+    await db.run('UPDATE social_inquiries SET status = ?, leadId = ? WHERE id = ?', ['Extracted', leadId, id]);
+
+    // Insert Notification
+    const notifId = generateId('NOTIF');
+    await db.run(
+      `INSERT INTO notifications (id, type, text, time, read, userId) VALUES (?, 'lead', ?, 'Just now', 0, ?)`,
+      [notifId, `🎯 Converted inquiry from ${inquiry.senderName} (${inquiry.platform}) into a CRM lead!`, userId]
+    );
+
+    const newLead = await db.get('SELECT * FROM leads WHERE id = ?', [leadId]);
+    const updatedInquiry = await db.get('SELECT * FROM social_inquiries WHERE id = ?', [id]);
+
+    res.json({
+      success: true,
+      lead: newLead,
+      inquiry: {
+        ...updatedInquiry,
+        extractedData: typeof updatedInquiry.extractedData === 'string' ? JSON.parse(updatedInquiry.extractedData || '{}') : updatedInquiry.extractedData || {}
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Bulk extract all high-intent inquiries
+app.post('/api/social/inquiries/bulk-extract', async (req, res) => {
+  try {
+    const db = await getDb();
+    let requesterId = req.headers['x-user-id'] || 'U-admin';
+    const user = await db.get('SELECT * FROM users WHERE id = ?', [requesterId]);
+    const userId = user ? user.id : 'U-117bb402-3724-4580-9da9-01311b759889';
+
+    const inquiries = await db.all("SELECT * FROM social_inquiries WHERE status = 'New' AND (intent = 'High Intent' OR intentScore >= 90)");
+    const createdLeads = [];
+    const updatedInquiries = [];
+
+    for (const inq of inquiries) {
+      const ext = typeof inq.extractedData === 'string' ? JSON.parse(inq.extractedData || '{}') : (inq.extractedData || {});
+      const leadId = generateId('L');
+      const leadName = inq.senderName || 'Social Prospect';
+      const leadInitials = leadName.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2) || 'SL';
+      const company = ext.company || inq.senderCompany || `${inq.senderName} (Social Inbound)`;
+      const title = inq.senderTitle || '';
+      const email = ext.email || '';
+      const phone = ext.phone || '+91 98000 00000';
+      const source = `${inq.platform} Lead Extractor`;
+      const owner = user?.name || 'Sales Team';
+      const ownerInitials = user?.name ? user.name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2) : 'ST';
+      const dealValue = ext.budget || '₹3,50,000';
+      const dealValueNum = parseInt(dealValue.replace(/[^0-9]/g, '')) || 350000;
+      const nowIso = new Date().toISOString();
+      const todayFormatted = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+      const notes = `[Social Lead from ${inq.platform} (${inq.queryType})]\nHandle: ${inq.senderHandle}\nQuery: "${inq.queryText}"\nBudget: ${dealValue}\nTeam: ${ext.teamSize || 'N/A'}`;
+
+      await db.run(
+        `INSERT INTO leads (id, name, initials, company, title, email, phone, status, priority, score, source, owner, ownerInitials, lastContact, nextFollowup, dealValue, dealValueNum, probability, created, industry, location, website, notes, businessDescription, companySize, annualRevenue, businessModel, userId, uploaded_at, batch_index)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'New', 'High', ?, ?, ?, ?, ?, 'Follow up scheduled', ?, ?, 70, ?, ?, 'India', '', ?, '', ?, ?, '', ?, ?, 0)`,
+        [
+          leadId, leadName, leadInitials, company, title, email, phone,
+          inq.intentScore || 95, source, owner, ownerInitials, nowIso,
+          dealValue, dealValueNum, todayFormatted,
+          ext.industry || '', notes, ext.teamSize || '', dealValue, userId, nowIso
+        ]
+      );
+
+      await db.run('UPDATE social_inquiries SET status = ?, leadId = ? WHERE id = ?', ['Extracted', leadId, inq.id]);
+
+      const freshLead = await db.get('SELECT * FROM leads WHERE id = ?', [leadId]);
+      createdLeads.push(freshLead);
+      updatedInquiries.push({ ...inq, status: 'Extracted', leadId, extractedData: ext });
+    }
+
+    if (createdLeads.length > 0) {
+      const notifId = generateId('NOTIF');
+      await db.run(
+        `INSERT INTO notifications (id, type, text, time, read, userId) VALUES (?, 'lead', ?, 'Just now', 0, ?)`,
+        [notifId, `⚡ Batch Extracted ${createdLeads.length} qualified leads from social media platforms!`, userId]
+      );
+    }
+
+    res.json({
+      success: true,
+      extractedCount: createdLeads.length,
+      leads: createdLeads,
+      inquiries: updatedInquiries
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Reply to inquiry
+app.post('/api/social/inquiries/:id/reply', async (req, res) => {
+  try {
+    const db = await getDb();
+    const { id } = req.params;
+    const { replyText } = req.body;
+    if (!replyText) return res.status(400).json({ error: 'Reply text is required' });
+
+    await db.run('UPDATE social_inquiries SET status = ?, replyText = ? WHERE id = ?', ['Replied', replyText, id]);
+    const updated = await db.get('SELECT * FROM social_inquiries WHERE id = ?', [id]);
+
+    res.json({
+      success: true,
+      inquiry: {
+        ...updated,
+        extractedData: typeof updated.extractedData === 'string' ? JSON.parse(updated.extractedData || '{}') : updated.extractedData || {}
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Simulate a live incoming social inquiry
+app.post('/api/social/simulate', async (req, res) => {
+  try {
+    const db = await getDb();
+    const userId = req.headers['x-user-id'] || 'U-117bb402-3724-4580-9da9-01311b759889';
+
+    const mockPool = [
+      {
+        platform: 'LinkedIn',
+        senderName: 'Sanjay Krishnan',
+        senderHandle: '@sanjay-krishnan-ops',
+        senderTitle: 'Chief Commercial Officer',
+        senderCompany: 'OmniTrade Retail India',
+        queryType: 'Lead Gen Form',
+        queryText: 'Hi Saivyy team, we are scaling our omnichannel merchant network across South India. Need a CRM that supports call recording and multi-territory rep tracking. Please email pricing and demo slot to sanjay.k@omnitrade.in',
+        intent: 'High Intent',
+        intentScore: 97,
+        extractedData: JSON.stringify({
+          email: 'sanjay.k@omnitrade.in',
+          phone: '+91 98410 77219',
+          company: 'OmniTrade Retail India',
+          teamSize: '60 Seats',
+          budget: '₹8,50,000 / yr',
+          industry: 'Retail & Commerce',
+          service: 'Territory Rep Tracking CRM'
+        })
+      },
+      {
+        platform: 'Instagram',
+        senderName: 'Pooja Varma',
+        senderHandle: '@pooja_varma_studio',
+        senderTitle: 'Creative Director',
+        senderCompany: 'Varma Brand Studios',
+        queryType: 'Direct Message',
+        queryText: 'Loved your post on lead status tracking! Can we integrate our website forms and Instagram DM inquiries automatically into the pipeline? Our team has 15 people. Call me at 98119 44321!',
+        intent: 'High Intent',
+        intentScore: 93,
+        extractedData: JSON.stringify({
+          email: 'pooja@varmastudios.com',
+          phone: '+91 98119 44321',
+          company: 'Varma Brand Studios',
+          teamSize: '15 Seats',
+          budget: '₹2,60,000 / yr',
+          industry: 'Creative & Media',
+          service: 'Website & Social Pipeline Sync'
+        })
+      },
+      {
+        platform: 'Meta',
+        senderName: 'Alok Nambiar',
+        senderHandle: '@alok.nambiar.tech',
+        senderTitle: 'Head of Enterprise IT',
+        senderCompany: 'Nambiar Engineering Works',
+        queryType: 'Meta Instant Lead Form',
+        queryText: 'Looking for a B2B sales automation tool to replace spreadsheets for 35 sales engineers. Contact me at alok@nambiareng.com or +91 97400 66543.',
+        intent: 'High Intent',
+        intentScore: 95,
+        extractedData: JSON.stringify({
+          email: 'alok@nambiareng.com',
+          phone: '+91 97400 66543',
+          company: 'Nambiar Engineering Works',
+          teamSize: '35 Seats',
+          budget: '₹5,20,000 / yr',
+          industry: 'Engineering & Manufacturing',
+          service: 'B2B Sales Automation'
+        })
+      },
+      {
+        platform: 'WhatsApp',
+        senderName: 'Harish Tandon',
+        senderHandle: '+91 98205 11234',
+        senderTitle: 'Managing Partner',
+        senderCompany: 'Tandon Wealth Advisors',
+        queryType: 'WhatsApp Inbound',
+        queryText: 'Need client follow-up reminder automation and meeting scheduling for our 10 investment advisors. Saw your WhatsApp campaign. Email: harish@tandonwealth.in',
+        intent: 'High Intent',
+        intentScore: 96,
+        extractedData: JSON.stringify({
+          email: 'harish@tandonwealth.in',
+          phone: '+91 98205 11234',
+          company: 'Tandon Wealth Advisors',
+          teamSize: '10 Seats',
+          budget: '₹3,00,000 / yr',
+          industry: 'Financial Advisory',
+          service: 'Advisor Follow-up Automation'
+        })
+      }
+    ];
+
+    const pick = mockPool[Math.floor(Math.random() * mockPool.length)];
+    const id = generateId('SI');
+
+    await db.run(
+      `INSERT INTO social_inquiries (id, platform, senderName, senderHandle, senderTitle, senderCompany, queryType, queryText, intent, intentScore, extractedData, status, leadId, timestamp, replyText, userId)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'New', NULL, 'Just now', NULL, ?)`,
+      [id, pick.platform, pick.senderName, pick.senderHandle, pick.senderTitle, pick.senderCompany, pick.queryType, pick.queryText, pick.intent, pick.intentScore, pick.extractedData, userId]
+    );
+
+    // Also add notification
+    const notifId = generateId('NOTIF');
+    await db.run(
+      `INSERT INTO notifications (id, type, text, time, read, userId) VALUES (?, 'inquiry', ?, 'Just now', 0, ?)`,
+      [notifId, `📥 New social inquiry received from ${pick.senderName} on ${pick.platform}!`, userId]
+    );
+
+    const fresh = await db.get('SELECT * FROM social_inquiries WHERE id = ?', [id]);
+    res.json({
+      success: true,
+      inquiry: {
+        ...fresh,
+        extractedData: typeof fresh.extractedData === 'string' ? JSON.parse(fresh.extractedData || '{}') : fresh.extractedData || {}
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Live scan simulation across all connected social channels
+app.post('/api/social/sync', async (req, res) => {
+  try {
+    const db = await getDb();
+    await db.run("UPDATE social_accounts SET lastSync = 'Synced just now' WHERE status = 1");
+    res.json({
+      success: true,
+      message: 'Successfully polled Meta, Instagram, LinkedIn, X, and WhatsApp channels.',
+      syncedAt: 'Just now'
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
